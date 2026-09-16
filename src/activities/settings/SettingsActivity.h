@@ -1,6 +1,7 @@
 #pragma once
 #include <I18n.h>
 
+#include <algorithm>
 #include <functional>
 #include <span>
 #include <string>
@@ -77,8 +78,44 @@ struct SettingInfo {
     return *this;
   }
 
+  // Stored values, in the order the options should be OFFERED. Empty means "offer them in
+  // stored-value order", which is the default. Persisted indices are frozen by every settings
+  // file already on a card, so a menu that reads badly cannot be fixed by renumbering the enum --
+  // this reorders the presentation alone. enumValues/staticEnumValues stay indexed BY STORED
+  // VALUE, so settingValueText() and the persistence clamp need no mapping.
+  std::vector<uint8_t> enumOrder;
+
   std::span<const StrId> enumLabels() const {
     return staticEnumValues.empty() ? std::span<const StrId>(enumValues) : staticEnumValues;
+  }
+
+  // Menu slot -> stored value, and back. Identity while enumOrder is empty. Both clamp, so a
+  // corrupt or migrated byte lands on the first slot rather than indexing out of the table.
+  uint8_t storedFromSlot(const uint8_t slot) const {
+    if (enumOrder.empty()) return slot;
+    return slot < enumOrder.size() ? enumOrder[slot] : enumOrder[0];
+  }
+  uint8_t slotFromStored(const uint8_t stored) const {
+    if (enumOrder.empty()) return stored;
+    const auto it = std::find(enumOrder.begin(), enumOrder.end(), stored);
+    return it != enumOrder.end() ? static_cast<uint8_t>(it - enumOrder.begin()) : 0;
+  }
+  // The labels in menu order. Returned by value: the popup wants a contiguous array and the
+  // reordered view does not exist anywhere else. At most SIDE_BUTTON_ACTION_COUNT entries.
+  std::vector<StrId> orderedEnumLabels() const {
+    const auto labels = enumLabels();
+    if (enumOrder.empty()) return std::vector<StrId>(labels.begin(), labels.end());
+    std::vector<StrId> out;
+    out.reserve(enumOrder.size());
+    for (const uint8_t stored : enumOrder) {
+      if (stored < labels.size()) out.push_back(labels[stored]);
+    }
+    return out;
+  }
+
+  SettingInfo& withEnumOrder(std::vector<uint8_t> order) {
+    enumOrder = std::move(order);
+    return *this;
   }
 
   static SettingInfo Toggle(StrId nameId, uint8_t CrossPointSettings::* ptr, const char* key = nullptr,
