@@ -752,29 +752,166 @@ def is_sliver_panel(box: list[int], page_w: int, page_h: int) -> bool:
     return area_frac < 0.025 and aspect > 4.0
 
 
-def _detect_panels_yolo(img, conf: float = 0.4) -> list[list[int]] | None:
-    """Detect panels with the YOLO26-nano Manga109 model. Returns None if
-    the model isn't available (caller should fall back to the grid
-    heuristic)."""
+# Fraction of a text box's area that must fall inside a panel before that panel
+# is grown to cover it. A bubble straddling a gutter belongs to whichever panel
+# holds most of it; anything below this is page furniture (page numbers, credits,
+# a caption sitting in the margin) that no panel should be stretched to reach.
+TEXT_OWNERSHIP_MIN_FRAC = 0.25
+
+# Breathing room added around a text box before a panel is grown over it, as a
+# fraction of the page's short side (with a floor for thumbnail-sized scans).
+# The detector boxes the GLYPHS, not the balloon holding them: unioning on the
+# bare box lands the crop edge on the bubble's own outline, which reads as a
+# second cut. Measured on a 1024px-wide page, the drawn caption border sits
+# 12-18px outside the detected text, so 2% clears it and leaves a visible gap.
+TEXT_PAD_FRAC_OF_PAGE = 0.02
+TEXT_PAD_MIN = 6
+
+
+def text_pad_px(page_w: int, page_h: int) -> int:
+    """Padding to put around a text box before growing a panel over it. Scaled
+    to the page so it behaves the same on a 290px thumbnail and a 2000px scan."""
+    return max(TEXT_PAD_MIN, round(min(page_w, page_h) * TEXT_PAD_FRAC_OF_PAGE))
+
+
+def expand_panels_over_text(panels: list[list[int]], texts: list[list[int]], page_w: int,
+                            page_h: int) -> list[list[int]]:
+    """Grow each panel box to cover the speech bubbles and caption boxes that
+    belong to it.
+
+    Manga bubbles routinely overhang the frame they are spoken in -- they are
+    drawn on top of the border, or pushed out into the gutter. Cropping on the
+    detected frame rectangle alone slices the text off mid-word, which is exactly
+    what panel zoom must not do. Each text box is assigned to the panel it
+    overlaps most and that panel's box is unioned with it.
+
+    Ownership is decided against the ORIGINAL panel boxes, so one panel's growth
+    can never make it the owner of the next panel's bubbles. Ownership also uses
+    the bare text box, so the padding can never drag in a bubble that would
+    otherwise belong to a neighbour.
+    """
+    if not texts:
+        return panels
+
+    pad = text_pad_px(page_w, page_h)
+    expanded = [list(p) for p in panels]
+    for text in texts:
+        text_area = _box_area(text)
+        if text_area <= 0:
+            continue
+        owner, best_overlap = -1, 0
+        for i, panel in enumerate(panels):
+            overlap = _overlap_area(panel, text)
+            if overlap > best_overlap:
+                owner, best_overlap = i, overlap
+        if owner < 0 or best_overlap < text_area * TEXT_OWNERSHIP_MIN_FRAC:
+            continue
+        # Grow only on the sides the bubble actually breaches, and clear it by
+        # `pad` when doing so. A bubble sitting just inside the border must not
+        # push the crop out into the gutter.
+        base, box = panels[owner], expanded[owner]
+        if text[0] < base[0]:
+            box[0] = min(box[0], text[0] - pad)
+        if text[1] < base[1]:
+            box[1] = min(box[1], text[1] - pad)
+        if text[2] > base[2]:
+            box[2] = max(box[2], text[2] + pad)
+        if text[3] > base[3]:
+            box[3] = max(box[3], text[3] + pad)
+
+    for box in expanded:
+        box[0] = max(0, box[0])
+        box[1] = max(0, box[1])
+        box[2] = min(page_w, box[2])
+        box[3] = min(page_h, box[3])
+    return expanded
+
+
+# Confidence floor the panel model is queried at. Detections between this and
+# the caller's `conf` are corroboration only, never panels in their own right.
+PANEL_WEAK_CONF = 0.15
+
+# A frame is replaced by the sub-panels found inside it only when the split is
+# convincing on every count: each child is meaningfully smaller than the frame,
+# sits almost entirely within it, the children between them account for most of
+# the frame, and they tile rather than restate each other. A frame the model saw
+# twice at different scales fails the first test; a lone weak box inside a real
+# panel fails the third.
+SUBPANEL_MAX_AREA_FRAC = 0.7
+SUBPANEL_INSIDE_FRAC = 0.85
+SUBPANEL_COVER_FRAC = 0.7
+SUBPANEL_SIBLING_OVERLAP_FRAC = 0.3
+
+
+def split_frames_over_subpanels(frames: list[list[int]],
+                                candidates: list[list[int]]) -> list[list[int]]:
+    """Replace a frame with the sub-panels the model also found inside it.
+
+    Neighbouring panels come back as one frame when their shared border is faint
+    or their artwork runs across it -- a whole row of a western strip can arrive
+    as a single box. The model usually does see the individual panels, just below
+    the confidence bar, and _dedupe_boxes() then folds those weaker boxes into the
+    frame that contains them. This recovers them: a weak box is trusted only where
+    a set of siblings tiles a confident frame, so nothing is admitted that the
+    model did not propose and no frame is split on the strength of one stray box.
+    """
+    out: list[list[int]] = []
+    for frame in frames:
+        frame_area = _box_area(frame)
+        children = [
+            box for box in candidates
+            if 0 < _box_area(box) <= SUBPANEL_MAX_AREA_FRAC * frame_area
+            and _overlap_area(box, frame) >= SUBPANEL_INSIDE_FRAC * _box_area(box)
+        ]
+        if len(children) < 2 or sum(_box_area(c) for c in children) < SUBPANEL_COVER_FRAC * frame_area:
+            out.append(frame)
+            continue
+        tiles = all(
+            _overlap_area(a, b) <= SUBPANEL_SIBLING_OVERLAP_FRAC * min(_box_area(a), _box_area(b))
+            for i, a in enumerate(children) for b in children[i + 1:]
+        )
+        out.extend(children if tiles else [frame])
+    return out
+
+
+def _detect_panels_yolo(img, conf: float = 0.4) -> tuple[list[list[int]], list[list[int]]] | None:
+    """Detect panels with the YOLO26-nano Manga109 model. Returns
+    (frames, text boxes), or None if the model isn't available (caller should
+    fall back to the grid heuristic).
+
+    The model is queried well below `conf`. A box under that bar is never a
+    panel on its own -- it is only kept as corroboration that a confident frame
+    is really several panels; see split_frames_over_subpanels().
+    """
     model = _load_yolo_model()
     if model is None:
         return None
 
-    results = model.predict(img, conf=conf, iou=0.5, verbose=False)
+    results = model.predict(img, conf=PANEL_WEAK_CONF, iou=0.5, verbose=False)
     boxes_with_conf = []
+    candidates = []
+    text_boxes = []
     for box in results[0].boxes:
-        if int(box.cls) != 0:  # 0=panel, 1=text -- we only want panels here
-            continue
+        cls = int(box.cls)  # 0=panel, 1=text
+        confidence = float(box.conf)
         x1, y1, x2, y2 = box.xyxy[0].tolist()
         xy_box = [int(x1), int(y1), int(x2), int(y2)]
+        if cls == 1:
+            if confidence >= conf:  # a weak text box must not grow a crop
+                text_boxes.append(xy_box)
+            continue
+        if cls != 0:
+            continue
         if is_sliver_panel(xy_box, img.width, img.height):
             continue
-        boxes_with_conf.append((xy_box, float(box.conf)))
+        candidates.append(xy_box)
+        if confidence >= conf:
+            boxes_with_conf.append((xy_box, confidence))
 
     boxes = _dedupe_boxes(boxes_with_conf)
     if not boxes:
-        return [[0, 0, img.width, img.height]]
-    return boxes
+        return [[0, 0, img.width, img.height]], text_boxes
+    return split_frames_over_subpanels(boxes, candidates), text_boxes
 
 
 def _merge_small_gaps(splits: list[int], min_size: int) -> list[int]:
@@ -872,12 +1009,20 @@ def _detect_panels_grid(img) -> list[list[int]]:
     return panels
 
 
-def detect_panels(img) -> list[list[int]]:
-    """Detect panel rectangles -- YOLO model if available, else grid heuristic."""
-    boxes = _detect_panels_yolo(img)
-    if boxes is not None:
-        return boxes
-    return _detect_panels_grid(img)
+def detect_panels(img) -> tuple[list[list[int]], list[list[int]]]:
+    """Detect panel rectangles -- YOLO model if available, else grid heuristic.
+
+    Returns (frames, text boxes). The frames are the borders as drawn, which is
+    what reading order must be derived from; the text boxes are what
+    expand_panels_over_text() then grows the CROP rectangles over. Keeping the
+    two apart matters: a bubble pulling a panel's box sideways across a gutter
+    would otherwise move its centre and could retier the page. The grid
+    heuristic has no text detection, so it returns no text boxes.
+    """
+    detected = _detect_panels_yolo(img)
+    if detected is not None:
+        return detected
+    return _detect_panels_grid(img), []
 
 
 def _y_overlap_frac(a: list[int], b: list[int]) -> float:
@@ -1716,8 +1861,12 @@ def main():
                 # single column can only move boxes away from what the cut established.
                 boxes = detect_webtoon_panels(img)
             else:
-                boxes = detect_panels(img)
-                boxes = sort_panels_reading_order(boxes, rtl=not args.ltr)
+                frames, text_boxes = detect_panels(img)
+                # Order on the frames as drawn, then grow the crops over the
+                # bubbles -- expand_panels_over_text() is index-preserving, so
+                # the reading order established here survives the expansion.
+                frames = sort_panels_reading_order(frames, rtl=not args.ltr)
+                boxes = expand_panels_over_text(frames, text_boxes, img_w, img_h)
 
             # Crop and save every panel first (fast, local) before dispatching
             # the slow network calls concurrently -- OCR is I/O-bound (network
