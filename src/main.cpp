@@ -19,9 +19,6 @@
 #include <WiFi.h>
 #include <XteinkDetect.h>
 #include <builtinFonts/all.h>
-#if FREEINK_CAP_TOUCH
-#include <esp_sntp.h>
-#endif
 
 #include <cstring>
 
@@ -145,10 +142,14 @@ EpdFontFamily ui12FontFamily(&ui12RegularFont, &ui12BoldFont);
 // Definitions for SilentRestart.h. RTC_NOINIT survives ESP.restart() but not power loss.
 RTC_NOINIT_ATTR uint32_t silentRebootMagic;
 RTC_NOINIT_ATTR uint32_t silentRebootTarget;
+RTC_NOINIT_ATTR uint32_t silentRebootPayload;
 constexpr uint32_t SILENT_REBOOT_MAGIC = 0xC1EAB007;
 constexpr uint32_t SILENT_REBOOT_TARGET_HOME = 0;
 constexpr uint32_t SILENT_REBOOT_TARGET_READER = 1;
 constexpr uint32_t SILENT_REBOOT_TARGET_TRANSLATE = 2;  // keep highest: bounds the setup() range check
+// Bit in silentRebootPayload, which is a separate word from the target above -- the two
+// never share bits.
+constexpr uint32_t SILENT_REBOOT_LIGHT_ON = 1U << 0;
 
 // How the device is coming back to life, resolved once at boot. Both resume
 // flows suppress the splash and leave the panel holding its pre-boot frame; a
@@ -183,13 +184,24 @@ static bool finishWifiSessionWithoutRestart() {
 }
 #endif
 
+// A silent restart is internal maintenance, so the light must come back exactly
+// as the user left it. SETTINGS.frontlightOn is the saved preference and
+// legitimately diverges from the live state (a wake with Restore Light on Wake
+// off leaves the light off while the saved "was on" preference is kept), so
+// carry the live state across the reboot instead of re-deriving it from
+// settings. Cleared with the magic in setup().
+static void armSilentReboot(const uint32_t target) {
+  silentRebootTarget = target;
+  silentRebootPayload = Frontlight.isOn() ? SILENT_REBOOT_LIGHT_ON : 0;
+  silentRebootMagic = SILENT_REBOOT_MAGIC;
+}
+
 void silentRestart() {
   if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
 #if FREEINK_CAP_TOUCH
   if (finishWifiSessionWithoutRestart()) return;
 #endif
-  silentRebootTarget = SILENT_REBOOT_TARGET_HOME;
-  silentRebootMagic = SILENT_REBOOT_MAGIC;
+  armSilentReboot(SILENT_REBOOT_TARGET_HOME);
   LOG_DBG("MAIN", "Silent restart (target=home)");
   // E-ink retains the previous frame until Home's first paint lands (~2-3s).
   // Without an overlay, users don't see the reboot and fire input through to
@@ -205,8 +217,7 @@ void silentRestartToReader() {
 #if FREEINK_CAP_TOUCH
   if (finishWifiSessionWithoutRestart()) return;
 #endif
-  silentRebootTarget = SILENT_REBOOT_TARGET_READER;
-  silentRebootMagic = SILENT_REBOOT_MAGIC;
+  armSilentReboot(SILENT_REBOOT_TARGET_READER);
   LOG_DBG("MAIN", "Silent restart (target=reader)");
   GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
   delay(50);
@@ -225,8 +236,7 @@ void silentRestartToTranslation() {
 
 void restartToHomeAfterStorageHandoff() {
   if (deepSleepInProgress) return;  // sleeping supersedes the storage handoff reboot
-  silentRebootTarget = SILENT_REBOOT_TARGET_HOME;
-  silentRebootMagic = SILENT_REBOOT_MAGIC;
+  armSilentReboot(SILENT_REBOOT_TARGET_HOME);
   LOG_DBG("MAIN", "Restart after storage handoff (target=home)");
   GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
   delay(50);
@@ -428,8 +438,10 @@ void setup() {
   const bool isSilentReboot = (silentRebootMagic == SILENT_REBOOT_MAGIC);
   const uint32_t snapshotTarget =
       (isSilentReboot && silentRebootTarget <= SILENT_REBOOT_TARGET_TRANSLATE) ? silentRebootTarget : 0;
+  const bool silentRebootLightOn = isSilentReboot && (silentRebootPayload & SILENT_REBOOT_LIGHT_ON) != 0;
   silentRebootMagic = 0;
   silentRebootTarget = 0;
+  silentRebootPayload = 0;
 
   gpio.begin();
   powerManager.begin();
@@ -508,8 +520,10 @@ void setup() {
 
   // Brightness and warmth are always restored. A normal wake starts with the
   // light off unless Restore Light on Wake is enabled; silent maintenance
-  // reboots preserve the live state so they do not unexpectedly go dark.
-  const bool restoreLightOn = SETTINGS.frontlightOn != 0 && (SETTINGS.frontlightRestoreOnWake != 0 || isSilentReboot);
+  // reboots replay the live state captured at restart, so they neither go dark
+  // nor light up against the user's wake preference.
+  const bool restoreLightOn =
+      isSilentReboot ? silentRebootLightOn : (SETTINGS.frontlightOn != 0 && SETTINGS.frontlightRestoreOnWake != 0);
   Frontlight.begin(SETTINGS.frontlightBrightness, SETTINGS.frontlightWarmth, restoreLightOn);
 
   switch (wakeupReason) {
