@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace {
@@ -157,9 +158,54 @@ const char* g_vocabIdxResolved = nullptr;
 const char* g_namesIdxResolved = nullptr;
 const char* g_grammarIdxResolved = nullptr;
 
+// The folder the Japanese dictionary lives in. Two spellings are accepted, the same way the font
+// registry accepts /.fonts beside /fonts: the dotted one keeps the folder out of the file browser
+// (hidden by default) and is preferred when both exist. Resolved once and cleared by
+// releaseCaches(), so a dictionary uploaded mid-session into the other root is picked up next
+// session rather than never.
+std::string g_jpRootResolved;
+
+const char* jpRoot() {
+  if (g_jpRootResolved.empty()) {
+    g_jpRootResolved = Storage.exists("/.dictionaries/jp") ? "/.dictionaries/jp" : "/dictionaries/jp";
+  }
+  return g_jpRootResolved.c_str();
+}
+
+// A DictIndex path constant rewritten under the resolved root. The constants stay full paths
+// because a host-side tool reads them directly; only the folder half is substituted here.
+std::string underJpRoot(const char* path) {
+  const char* leaf = strrchr(path, '/');
+  return std::string(jpRoot()) + (leaf ? leaf : "/");
+}
+
+// Storage.exists() on the path as it will actually be opened -- under the resolved root.
+bool existsUnderRoot(const char* path, std::string& out) {
+  out = underJpRoot(path);
+  return Storage.exists(out.c_str());
+}
+
 const char* resolveIdxPath(const char*& cache, const char* preferred, const char* jpLegacy, const char* old,
                            const char* legacy) {
   if (cache) return cache;
+  // Probed under the resolved root; the winner is interned so the returned pointer stays valid.
+  static std::vector<std::unique_ptr<std::string>> interned;
+  std::string candidate;
+  const auto intern = [](std::string&& v) -> const char* {
+    interned.push_back(std::unique_ptr<std::string>(new (std::nothrow) std::string(std::move(v))));
+    return interned.back() ? interned.back()->c_str() : nullptr;
+  };
+  for (const char* p : {preferred, jpLegacy, old, legacy}) {
+    if (!p) continue;
+    if (existsUnderRoot(p, candidate)) {
+      if (const char* held = intern(std::move(candidate))) {
+        if (p == legacy) LOG_INF("DICT", "Using legacy dictionary filename: %s", held);
+        cache = held;
+        return cache;
+      }
+      break;  // OOM interning: fall through to the plain paths below
+    }
+  }
   if (Storage.exists(preferred)) {
     cache = preferred;
   } else if (jpLegacy && Storage.exists(jpLegacy)) {
@@ -755,6 +801,7 @@ bool DictIndex::consumeHeapLimited() {
 }
 
 void DictIndex::releaseCaches() {
+  g_jpRootResolved.clear();  // re-probe /.dictionaries vs /dictionaries next session
   g_missMemo.reset();
   g_vocabHandles.release();
   g_grammarHandles.release();
