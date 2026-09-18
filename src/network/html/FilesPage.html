@@ -1803,7 +1803,7 @@
     <h3>✏️ Rename File</h3>
     <div class="folder-form">
       <p class="file-info">Renaming <strong id="renameItemName"></strong></p>
-      <input type="text" id="renameNewName" class="folder-input" placeholder="New file name...">
+      <input type="text" id="renameNewName" class="folder-input" placeholder="New name...">
       <input type="hidden" id="renameItemPath">
       <button class="rename-btn-confirm" onclick="confirmRename()">Rename</button>
       <button class="delete-btn-cancel" onclick="closeRenameModal()">Cancel</button>
@@ -2052,7 +2052,7 @@
           fileTableContent += `<td><span class="file-icon">📁</span><a href="/files?path=${encodeURIComponent(folderPath)}" class="folder-link">${escapeHtml(file.name)}</a></td>`;
           fileTableContent += '<td><span class="folder-badge">FOLDER</span></td>';
           fileTableContent += '<td>-</td>';
-          fileTableContent += `<td class="actions-col"><div class="action-icon-group"><button class="delete-btn" data-action="delete" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(folderPath)}" data-folder="true" title="Delete folder">🗑️</button></div></td>`;
+          fileTableContent += `<td class="actions-col"><div class="action-icon-group"><button class="rename-btn" data-action="rename" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(folderPath)}" data-folder="true" title="Rename folder">✏️</button><button class="delete-btn" data-action="delete" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(folderPath)}" data-folder="true" title="Delete folder">🗑️</button></div></td>`;
           fileTableContent += '</tr>';
         } else {
           let filePath = currentPath;
@@ -3013,7 +3013,7 @@
       if (btn.dataset.action === 'move') {
         openMoveModal(name, path);
       } else if (btn.dataset.action === 'rename') {
-        openRenameModal(name, path);
+        openRenameModal(name, path, btn.dataset.folder === 'true');
       } else if (btn.dataset.action === 'delete') {
         openDeleteModal(name, path, btn.dataset.folder === 'true');
       }
@@ -6314,8 +6314,10 @@ function retryAllFailedUploads() {
   }
 
   // Rename functions
-  function openRenameModal(name, path) {
-    document.getElementById('renameItemName').textContent = '📄 ' + name;
+  function openRenameModal(name, path, isFolder) {
+    // The icon follows the row the rename came from -- folders are renameable too, and the
+    // server carries the reading state of every book inside one.
+    document.getElementById('renameItemName').textContent = (isFolder ? '📁 ' : '📄 ') + name;
     document.getElementById('renameItemPath').value = path;
     document.getElementById('renameNewName').value = name;
     document.getElementById('renameModal').classList.add('open');
