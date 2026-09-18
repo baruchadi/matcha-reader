@@ -2,7 +2,7 @@
 
 A fork of [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) e-reader firmware for ESP32 devices (XTEINK X4, X3, X4C, X4-Pro, Papermono, Sticky), built for reading Japanese. Vertical text, instant dictionary lookup with verb deinflection, a manga panel reader, and page translation, all on e-ink.
 
-It includes all features of upstream CrossPoint and runs on any supported X4 or X3. You can try it first in the [simulator](https://github.com/eszter007/crosspoint-simulator-ios) — no device needed — on your desktop or as an iPhone app.
+It includes all features of upstream CrossPoint and runs on any supported ESP32 device. You can try it first in the [simulator](https://github.com/eszter007/crosspoint-simulator-ios) — no device needed — on your desktop or as an iPhone app.
 
 <p align="center">
   <img src="docs/images/screenshots/vertical-text.png" width="200" alt="Vertical Japanese text">
