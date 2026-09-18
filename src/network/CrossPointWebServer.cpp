@@ -29,6 +29,7 @@
 #include "html/js/jszip_minJs.generated.h"
 #include "util/BookCacheUtils.h"
 #include "util/DeleteUtils.h"
+#include "util/RenameWithState.h"
 #include "util/TaskWatchdog.h"
 
 namespace {
@@ -1019,11 +1020,7 @@ void CrossPointWebServer::handleRename() const {
     server->send(500, "text/plain", "Failed to open file");
     return;
   }
-  if (file.isDirectory()) {
-    file.close();
-    server->send(400, "text/plain", "Only files can be renamed");
-    return;
-  }
+  file.close();
 
   String parentPath = itemPath.substring(0, itemPath.lastIndexOf('/'));
   if (parentPath.isEmpty()) {
@@ -1036,14 +1033,16 @@ void CrossPointWebServer::handleRename() const {
   newPath += newName;
 
   if (Storage.exists(newPath.c_str())) {
-    file.close();
     server->send(409, "text/plain", "Target already exists");
     return;
   }
 
-  clearBookCache(itemPath.c_str());
-  const bool success = file.rename(newPath.c_str());
-  file.close();
+  // renamePathWithState(), not rename()+clearBookCache(): this handler used to DELETE the book's
+  // cache and leave its bookmarks behind, so renaming from the web threw away the progress the
+  // on-device rename carefully carries over. Same helper as the file browser now, folders
+  // included -- it moves the state of every book inside one, and puts it all back if any part
+  // fails.
+  const bool success = renamestate::renamePathWithState(itemPath.c_str(), newPath.c_str(), "WEB");
 
   if (success) {
     LOG_DBG("WEB", "Renamed file: %s -> %s", itemPath.c_str(), newPath.c_str());

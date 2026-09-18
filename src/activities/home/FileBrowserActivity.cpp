@@ -23,6 +23,7 @@
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
 #include "util/BookmarkUtil.h"
+#include "util/RenameWithState.h"
 
 namespace fui = freeink::ui;
 
@@ -439,19 +440,17 @@ void FileBrowserActivity::showEntryActions() {
     return;
   }
 
-  const bool isDirectory = files[nav.selected].back() == '/';
+  // Folders rename too: renamePathWithState() carries the reading state of every book inside.
   static constexpr StrId FILE_OPTIONS[] = {StrId::STR_OPEN, StrId::STR_DELETE, StrId::STR_RENAME};
-  static constexpr StrId DIRECTORY_OPTIONS[] = {StrId::STR_OPEN, StrId::STR_DELETE};
-  optionPopup.show(StrId::STR_FILENAME, isDirectory ? DIRECTORY_OPTIONS : FILE_OPTIONS, isDirectory ? 2 : 3, 0,
-                   [this](const int index) {
-                     if (index == 0) {
-                       activateSelected();
-                     } else if (index == 1) {
-                       deleteSelected();
-                     } else if (index == 2) {
-                       startRename();
-                     }
-                   });
+  optionPopup.show(StrId::STR_FILENAME, FILE_OPTIONS, 3, 0, [this](const int index) {
+    if (index == 0) {
+      activateSelected();
+    } else if (index == 1) {
+      deleteSelected();
+    } else if (index == 2) {
+      startRename();
+    }
+  });
   requestUpdate();
 }
 
@@ -501,13 +500,16 @@ void FileBrowserActivity::deleteSelected() {
 void FileBrowserActivity::startRename() {
   if (files.empty() || nav.selected < 0 || nav.selected >= listCount()) return;
 
-  const std::string oldEntry = files[nav.selected];
-  if (oldEntry.back() == '/') return;
+  std::string oldEntry = files[nav.selected];
+  // A folder entry carries a trailing '/' for display; the path on the card does not.
+  const bool isDirectory = oldEntry.back() == '/';
+  if (isDirectory) oldEntry.pop_back();
 
   std::string cleanBasePath = basepath;
   if (cleanBasePath.back() != '/') cleanBasePath += "/";
   const std::string oldPath = cleanBasePath + oldEntry;
-  const std::string extension = getFileExtension(oldEntry);
+  // A folder has no extension to preserve -- the whole name is the stem.
+  const std::string extension = isDirectory ? std::string() : getFileExtension(oldEntry);
   const std::string initialStem = utf8ComposeNfc(oldEntry.substr(0, oldEntry.size() - extension.size()));
   const size_t maxStemLength = NAME_BUFFER_SIZE - extension.size() - 1;
   auto keyboard = makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_RENAME), initialStem,
@@ -538,26 +540,10 @@ void FileBrowserActivity::renameSelectedFile(const std::string& oldPath, const s
     return;
   }
 
-  const std::string oldCachePath = getBookCachePath(oldPath);
-  const std::string newCachePath = getBookCachePath(newPath);
-  const bool isEpub = FsHelpers::hasEpubExtension(oldPath);
-  const std::string oldBookmarkPath = isEpub ? BookmarkUtil::getBookmarkPath(oldPath) : "";
-  const std::string newBookmarkPath = isEpub ? BookmarkUtil::getBookmarkPath(newPath) : "";
-  bool cacheMoved = false;
-  bool bookmarksMoved = false;
-  if (!moveStatePath(oldCachePath, newCachePath, cacheMoved)) return;
-  if (!moveStatePath(oldBookmarkPath, newBookmarkPath, bookmarksMoved)) {
-    rollBackStatePath(oldCachePath, newCachePath, cacheMoved);
-    return;
-  }
-  if (!Storage.rename(oldPath.c_str(), newPath.c_str())) {
-    LOG_ERR("FileBrowser", "Failed to rename file: %s -> %s", oldPath.c_str(), newPath.c_str());
-    rollBackStatePath(oldBookmarkPath, newBookmarkPath, bookmarksMoved);
-    rollBackStatePath(oldCachePath, newCachePath, cacheMoved);
-    return;
-  }
-
-  RECENT_BOOKS.updatePath(oldPath, newPath, oldCachePath, newCachePath);
+  // One helper for both callers: the web file manager renames through the same code, so the
+  // reading state cannot be preserved on one path and dropped on the other. It carries every
+  // book under a folder, and puts everything back if any part fails.
+  if (!renamestate::renamePathWithState(oldPath, newPath, "FileBrowser")) return;
   if (APP_STATE.openEpubPath == oldPath) {
     APP_STATE.openEpubPath = newPath;
     if (!APP_STATE.saveToFile()) LOG_ERR("FileBrowser", "Failed to save renamed open-book path");
@@ -566,7 +552,12 @@ void FileBrowserActivity::renameSelectedFile(const std::string& oldPath, const s
   {
     RenderLock lock(*this);
     loadFiles();
-    nav.selected = static_cast<int>(findEntry(newEntry));
+    // A folder's entry in `files` keeps the trailing '/' that marks it as one, so the renamed
+    // folder is only found under that spelling.
+    HalFile renamed = Storage.open(newPath.c_str());
+    const bool nowDirectory = renamed && renamed.isDirectory();
+    renamed.close();
+    nav.selected = static_cast<int>(findEntry(nowDirectory ? newEntry + "/" : newEntry));
     nav.follow(listCount());
   }
   requestUpdate(true);
