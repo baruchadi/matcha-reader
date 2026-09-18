@@ -513,7 +513,15 @@ namespace {
 //
 // A distinct magic from the single-page format: an old wlscan.bin simply fails the check and is
 // rebuilt, which is the right outcome for a disposable cache.
-constexpr uint32_t WLSCAN_MULTI_MAGIC = 0x4D534C57;  // "WLSM"
+//
+// Bump this whenever a change alters what a scan of the SAME page produces. The entry is
+// validated on glyphHash (codepoints + paragraph indices) and dictSize, neither of which moves
+// when the segmentation logic changes -- so a cache written by a version that segmented wrongly
+// still validates and is served back, and the fix never reaches the reader. That happened with
+// the tate-chu-yoko NUL truncation, where a match claimed the cells of the word after an upright
+// "!?" run: the word stayed unselectable on that page for good, since nothing re-examined a
+// cache that looked valid. Rebuilding costs one rescan (~300 ms, once per page).
+constexpr uint32_t WLSCAN_MULTI_MAGIC = 0x324D4C57;  // "WLM2" -- was "WLSM" before the tcy fix
 constexpr uint16_t WLSCAN_MAX_PAGES = 8;
 constexpr size_t WLSCAN_MAX_CARRY_BYTES = 4096;  // bound on the older entries carried forward
 
@@ -818,6 +826,12 @@ void WordSelectionScan::scanOnePosition() {
   int charCount = 0;
   for (size_t j = scanStart; j < allGlyphs.size() && charCount < kMaxLookupChars; j++) {
     if (allGlyphs[j].paragraphIndex != paraIdx) break;
+    // A tate-chu-yoko run is ONE glyph carrying codepoint 0 (its text lives in the run string,
+    // see VerticalParsedText). Encoding it writes a NUL, which truncates the C string the
+    // dictionary is given while the window kept counting -- the match then claimed cells past
+    // the punctuation and swallowed the word after it (受験 behind a 「!?」 run). It is a word
+    // boundary in any case: no entry spans it.
+    if (allGlyphs[j].codepoint == 0) break;
     encodeUtf8(allGlyphs[j].codepoint, text);
     charCount++;
   }
