@@ -11,11 +11,13 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "SdSystemDir.h"
+
 HalClock halClock;  // Singleton instance
 
 namespace {
 // Epoch stash for RTC-less devices; a plain decimal epoch in a tiny SD file.
-constexpr const char* CLOCK_STASH_PATH = "/system/.clock";
+std::string clockStashPath() { return sdsystem::path(".clock"); }
 
 // The firmware build date as an epoch -- the absolute "time can't be before this" floor.
 // Computed once from the compiler-provided __DATE__/__TIME__ ("Jul  4 2026" / "12:34:56").
@@ -196,7 +198,7 @@ void HalClock::restoreSystemTime() const {
 
   time_t best = buildEpoch();
   char buf[24] = {};
-  if (Storage.readFileToBuffer(CLOCK_STASH_PATH, buf, sizeof(buf) - 1) > 0) {
+  if (Storage.readFileToBuffer(clockStashPath().c_str(), buf, sizeof(buf) - 1) > 0) {
     const long long stashed = atoll(buf);
     if (stashed > static_cast<long long>(best)) best = static_cast<time_t>(stashed);
   }
@@ -211,11 +213,11 @@ void HalClock::restoreSystemTime() const {
 
 void HalClock::persistSystemTime() const {
   if (!systemTimeValid()) return;
-  Storage.mkdir("/system");  // no-op when it already exists
+  // sdsystem::dir() creates the folder when neither spelling exists.
   char buf[24];
   snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(time(nullptr)));
   HalFile f;
-  if (Storage.openFileForWrite("CLK", CLOCK_STASH_PATH, f)) {
+  if (Storage.openFileForWrite("CLK", clockStashPath().c_str(), f)) {
     f.write(reinterpret_cast<const uint8_t*>(buf), strlen(buf));
   }
 }

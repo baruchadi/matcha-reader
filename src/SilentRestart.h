@@ -1,5 +1,9 @@
 #pragma once
 
+#include <SdSystemDir.h>
+
+#include <string>
+
 // ESP.restart() with an RTC_NOINIT flag that survives the reboot, so setup()
 // skips the boot splash and routes straight to a destination. Used to clear
 // heap fragmentation accumulated during a wifi session. The live frontlight
@@ -22,7 +26,9 @@ void silentRestartToTranslation();
 // just before silentRestartToTranslation() and consumed (read + deleted) by
 // setup(). On SD, not RTC_NOINIT: a page of CJK text (2-6KB) doesn't fit the
 // ~2.6KB of RTC slow memory left.
-constexpr const char* TRANSLATE_STASH_PATH = "/system/translate_pending.txt";
+// A function, not a constant: the folder is "/.system" or "/system" depending on the card,
+// and that is only known once it is mounted.
+inline std::string translateStashPath() { return sdsystem::path("translate_pending.txt"); }
 
 // Reboots immediately after an activity releases exclusive raw storage. The
 // RTC target ensures setup() lands on Home instead of resuming a reader.

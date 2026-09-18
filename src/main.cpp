@@ -624,8 +624,8 @@ void setup() {
   // later can never replay a stale translation on some future silent reboot.
   std::string translateStashText;
   if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_TRANSLATE) {
-    translateStashText = Storage.readFile(TRANSLATE_STASH_PATH).c_str();
-    Storage.remove(TRANSLATE_STASH_PATH);
+    translateStashText = Storage.readFile(translateStashPath().c_str()).c_str();
+    Storage.remove(translateStashPath().c_str());
   }
   // Output polarity is resolved per render by ActivityManager (night mode
   // inverts only the reading surfaces), so nothing to restore here.
