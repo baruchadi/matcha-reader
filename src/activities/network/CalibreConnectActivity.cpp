@@ -1,5 +1,6 @@
 #include "CalibreConnectActivity.h"
 
+#include <DictIndex.h>
 #include <ESPmDNS.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
@@ -97,8 +98,12 @@ void CalibreConnectActivity::startWebServer() {
     // large asset into a stalled socket. ensureLoaded() restores the fonts when text is rendered
     // again, and the JP-fallback policy is untouched.
     sdFontSystem.releaseAllResidentFonts(renderer);
-    LOG_DBG("CAL", "Free heap before server alloc: %d bytes", ESP.getFreeHeap());
   }
+  // Same reasoning as CrossPointWebServerActivity::startWebServer(): this screen reads no
+  // dictionary, and its resident caches are several KB on a heap that is about to hand lwIP its
+  // send buffers. Outside the render lock -- it touches no pixels.
+  DictIndex::releaseCaches();
+  LOG_DBG("CAL", "Free heap before server alloc: %d bytes", ESP.getFreeHeap());
 
   webServer = makeUniqueNoThrow<CrossPointWebServer>();
   if (!webServer) {
