@@ -101,6 +101,13 @@ class EpubReaderWordLookupActivity final : public Activity {
   // stops paying for a reclaim that cannot help. Per-activity by design -- see reclaimFontHeap().
   bool reclaimIsFutile = false;
   bool selectPageDrawn = false;
+  // Whether the framebuffer holds the reader's page for the definition card to float over. Unlike
+  // selectPageDrawn it survives the definition being drawn -- the card covers only its own box --
+  // and it matters on the path that never renders select mode: a long press opens the definition
+  // directly, so after a chapter build (which borrows the framebuffer as scratch, hence
+  // pageOnScreen = false) nothing else would ever repaint the page behind the card. Render task
+  // only, apart from its initialization in the constructor.
+  bool pageBehindCard = false;
   // A column jump must be immediate even on a cold page. Until dictionary segmentation catches
   // up, highlight the nearest raw text cell and allow it to be looked up directly.
   size_t provisionalGlyph = SIZE_MAX;

@@ -45,6 +45,7 @@ EpubReaderWordLookupActivity::EpubReaderWordLookupActivity(GfxRenderer& renderer
     // Nothing has to be painted for the first frame when the reader's page is still on screen:
     // the cursor is two XOR-ed rectangles over pixels that are already there.
     selectPageDrawn = selectCtx.pageOnScreen;
+    pageBehindCard = selectCtx.pageOnScreen;
   }
   reclaimFontHeap();  // BEFORE building the scan -- see reclaimFontHeap()
   scan.initFromVerticalPage(page);
@@ -930,6 +931,7 @@ void EpubReaderWordLookupActivity::renderSelect() {
     const bool drew = selectCtx.repaintPage && selectCtx.repaintPage(selectCtx.repaintCtx);
     drawnBoxCount = 0;  // the repaint took the old highlight with it
     selectPageDrawn = drew;
+    pageBehindCard = drew;
     if (!drew) {
       // The page could not be drawn. Drawing the cursor now would XOR it onto a cleared screen --
       // the blank frame with a floating highlight this flag exists to avoid. Leave the frame
@@ -1834,6 +1836,15 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
       selectPageDrawn = false;
     }
     return;
+  }
+
+  // The card floats over the page, so the page has to be in the framebuffer first. Select mode
+  // normally guarantees that, but a long press skips it and can arrive with a framebuffer the
+  // chapter build used as scratch -- the card then sat on a blank screen on the first lookup
+  // after opening a book. A failed repaint leaves the flag clear, so the next render retries.
+  if (selectCtx.valid() && !pageBehindCard) {
+    renderer.clearScreen();
+    pageBehindCard = selectCtx.repaintPage(selectCtx.repaintCtx);
   }
 
   // Counter, right-aligned on the headword line. Paged mode counts pages of the definition;
