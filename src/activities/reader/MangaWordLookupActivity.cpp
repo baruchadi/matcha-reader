@@ -1,6 +1,7 @@
 #include "MangaWordLookupActivity.h"
 
 #include <Arduino.h>
+#include <algorithm>
 #include <DictIndex.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
@@ -371,6 +372,17 @@ void MangaWordLookupActivity::loop() {
       sideButtonsForLookup ? MappedInputManager::Button::ScreenRight : MappedInputManager::Button::ScreenDown;
   const auto scrollUpButton =
       sideButtonsForLookup ? MappedInputManager::Button::ScreenLeft : MappedInputManager::Button::ScreenUp;
+  // Up/down swipes scroll a long definition a screenful at a time, whatever the page-turn setting
+  // says -- the same gesture as the EPUB panels.
+  if (const int scroll = ReaderUtils::definitionScrollSwipe(mappedInput)) {
+    const int target = std::clamp(scrollOffset + scroll * visibleCapacity, 0, maxScroll);
+    if (hasResult && target != scrollOffset) {
+      scrollOffset = target;
+      requestUpdate();
+    }
+    return;
+  }
+
   buttonNavigator.onPressAndContinuous({nextEntryButton}, [this] { moveCursor(1); });
   buttonNavigator.onPressAndContinuous({previousEntryButton}, [this] { moveCursor(-1); });
   buttonNavigator.onPressAndContinuous({scrollDownButton}, [this] {
@@ -451,7 +463,7 @@ void MangaWordLookupActivity::renderContentArea(const Rect& body) {
                                                 maxDefY, definitionScroll, defScale);
 
   totalLines = metadataLines + wrap.totalLines;
-  const int visibleCapacity = body.height / defLineH;
+  visibleCapacity = std::max(1, body.height / defLineH);
   maxScroll = std::max(0, totalLines - visibleCapacity);
 }
 

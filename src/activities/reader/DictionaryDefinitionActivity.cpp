@@ -264,6 +264,19 @@ void DictionaryDefinitionActivity::loop() {
   // to learn: tap zones, inverted zones, swipes or inverted swipes, and nothing
   // at all when touch reader controls are off. Same helper the page turns use,
   // so the definition answers the gesture the reader already taught.
+  // Up/down swipes scroll a long definition whatever the page-turn setting says -- the same
+  // gesture as the Japanese panel, so an entry that does not fit reads the same way everywhere.
+  if (const int scroll = ReaderUtils::definitionScrollSwipe(mappedInput)) {
+    if (scroll > 0 && currentPage + 1 < totalPages) {
+      currentPage++;
+      requestUpdate();
+    } else if (scroll < 0 && currentPage > 0) {
+      currentPage--;
+      requestUpdate();
+    }
+    return;
+  }
+
   const auto touchTurn = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
   if (touchTurn.prev || touchTurn.next) {
     if (touchTurn.prev && currentPage > 0) {

@@ -1473,6 +1473,12 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
   // Paging follows whatever the reader is set to -- tap zones, inverted zones, swipes, inverted
   // swipes, or nothing when touch reader controls are off -- rather than a second scheme to
   // learn (#278). Same helper the page turns use, and the same one the English panel calls.
+  // Up/down swipes scroll a long entry whatever the page-turn setting says.
+  if (const int scroll = ReaderUtils::definitionScrollSwipe(mappedInput)) {
+    stepDefinitionPage(scroll);
+    return false;
+  }
+
   const auto touchTurn = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
   if (touchTurn.prev || touchTurn.next) {
     stepDefinitionPage(touchTurn.next ? 1 : -1);
