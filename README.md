@@ -1,13 +1,13 @@
 # Matcha Reader, a Japanese learning fork of CrossPoint
 
-A fork of [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) e-reader firmware for ESP32 devices (XTEINK X4, X3, X4C, X4-Pro, Papermono, Sticky), built for reading Japanese. Vertical text, instant dictionary lookup with verb deinflection, a manga panel reader, and page translation, all on e-ink.
+A fork of [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) e-reader firmware for ESP32 devices (XTEINK X4, X3, X4C, X4-Pro, Papermono, Sticky), built for reading Japanese. Vertical text, instant dictionary lookup with verb deinflection, a manga panel reader where you can look up words right in the speech bubbles, and page translation, all on e-ink.
 
 It includes all features of upstream CrossPoint and runs on any supported ESP32 device. You can try it first in the [simulator](https://github.com/eszter007/crosspoint-simulator-ios) — no device needed — on your desktop or as an iPhone app.
 
 <p align="center">
   <img src="docs/images/screenshots/vertical-text.png" width="200" alt="Vertical Japanese text">
   <img src="docs/images/screenshots/word-lookup.png" width="200" alt="Dictionary word lookup panel">
-  <img src="docs/images/screenshots/manga-full-page.png" width="200" alt="Manga reader with panel detection">
+  <img src="docs/images/screenshots/manga-full-page.png" width="200" alt="Manga reader, full page">
   <img src="docs/images/screenshots/language-stats.png" width="200" alt="Reading stats split by language">
 </p>
 
@@ -59,13 +59,17 @@ Translates the current page to English with Gemini. Works in any book, not only 
 
 Panels are detected at conversion time, along with their text and translations, so lookup and translation work offline and appear instantly. Move panel by panel in reading order, each one scaled to fill the screen.
 
+**Look up any word right in the picture.** On a touch device, hold a word in a speech bubble and its dictionary entry opens, the same as in a book. With buttons, open Word Lookup and an outline appears around a word on the page; the page-turn keys move it word by word and Confirm looks it up. The outline leaves the word readable, and it works on the full page and on zoomed or rotated panels. Books converted before this feature need converting again to get it; see [§6.4](USER_GUIDE.md#64-reading-manga).
+
 **Rotate Panels** (Settings, on by default) turns a panel whose shape does not match the screen, so a wide panel fills the display and you turn the device to read it. Switch it off to keep every panel upright inside the current orientation. **Panels Only** skips the full page overviews. Both are covered in [§6.4](USER_GUIDE.md#64-reading-manga).
 
 Convert with the [browser tool](https://eszter007.github.io/matcha-reader-tools/), or see [Converting manga](#converting-manga).
 
 <p align="center">
-  <img src="docs/images/screenshots/manga-full-page.png" width="260" alt="Full page view with panel highlights">
-  <img src="docs/images/screenshots/manga-panel-zoom.png" width="260" alt="Panel zoom view">
+  <img src="docs/images/screenshots/manga-full-page.png" width="200" alt="Full page view">
+  <img src="docs/images/screenshots/manga-panel-zoom.png" width="200" alt="Panel zoom view">
+  <img src="docs/images/screenshots/manga-word-select.png" width="200" alt="A word in a speech bubble outlined for lookup">
+  <img src="docs/images/screenshots/manga-word-lookup.png" width="200" alt="Dictionary entry for a word picked from a speech bubble">
 </p>
 
 ### Library

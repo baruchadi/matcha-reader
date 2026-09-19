@@ -932,6 +932,37 @@ Library grid, on shelves, and in Continue Reading with its cover, title, author 
 | Back | Leave the book | Back to full-page view |
 | Hold Back | Jump to the file browser | Jump to the file browser |
 
+<p align="center">
+  <img src="docs/images/screenshots/manga-full-page.png" width="240" alt="Full page view">
+  <img src="docs/images/screenshots/manga-panel-zoom.png" width="240" alt="Panel zoom view">
+</p>
+
+#### Looking up words in the picture
+
+You can pick a single word straight out of a speech bubble, on the full page or on a zoomed panel, including a
+panel turned sideways by Rotate Panels.
+
+- **By touch:** hold the word. Its dictionary entry opens. A hold just beside a word, on the gap between two
+  columns or next to the furigana, still finds it; a hold on the artwork does nothing.
+- **With buttons:** open **Word Lookup** (reader menu, or the power button or a side button set to Word Lookup).
+  The page stays on screen with an outline around one word. The keys that turn the page move the outline word by
+  word, in the same direction they turn pages, and **Confirm** looks the word up. On the X4 Pro, the **Home** key
+  picks the word while the outline is showing. Closing the entry brings you back to the same word, so the next one
+  is a single press away. **Back** ends the selection.
+
+The outline is a thin frame, so the word stays readable inside it. A word that continues into the next column gets
+a frame in each column.
+
+<p align="center">
+  <img src="docs/images/screenshots/manga-word-select.png" width="240" alt="A word in a speech bubble outlined for lookup">
+  <img src="docs/images/screenshots/manga-word-lookup.png" width="240" alt="The dictionary entry for the outlined word">
+</p>
+
+This needs manga converted with the current [Matcha Reader Tools](https://eszter007.github.io/matcha-reader-tools/)
+or `convert_manga.py`, which records where every line of text sits on the page. Manga converted earlier keeps
+working as before: Word Lookup shows the panel's text as a list, and a hold does nothing. Convert it again to get
+word selection. Conversion sends each panel to Gemini once, so a book costs one OCR pass either way.
+
 Two options change how panels are shown. Both are per book and are remembered.
 
 | Option | Where | Effect |
