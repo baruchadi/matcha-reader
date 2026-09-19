@@ -45,7 +45,7 @@ constexpr uint32_t WIFI_STACK_RESERVE = 36000;
 // no public API to ask ESP-IDF's WiFi driver "do you have enough heap", so this margin is a
 // conservative empirical floor above the crash point, not a documented ESP-IDF constant.
 constexpr uint32_t MIN_HEAP_FOR_WIFI_INIT = 70000;
-static std::string apiKeyPath() { return sdsystem::path("gemini.key"); }
+static std::string apiKeyPath() { return sdsystem::findUserFile("gemini.key"); }
 constexpr const char* GEMINI_MODEL = "gemini-3.6-flash";
 
 }  // namespace

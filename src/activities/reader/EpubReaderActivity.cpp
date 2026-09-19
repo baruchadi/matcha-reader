@@ -4062,7 +4062,12 @@ bool EpubReaderActivity::repaintVerticalPageForPanel() {
 
 void EpubReaderActivity::openWordLookupPanel(const bool pageOnScreen, const int lookupAtX, const int lookupAtY) {
   requestVerticalBuildNotice();
-  if (!epub || !DictIndex::isAvailable()) return;
+  if (!epub) return;
+  if (!DictIndex::isAvailable()) {
+    LOG_ERR("ERS", "Word lookup: no Japanese dictionary (%s / %s)", DictIndex::vocabIdxPath(),
+            DictIndex::vocabDatPath());
+    return;
+  }
   // The scan-result cache path lets a re-open of the same page skip the dictionary scan.
   const std::string scanCachePath = epub->getCachePath() + "/wlscan.bin";
   if (verticalSection) {

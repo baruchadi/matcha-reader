@@ -347,7 +347,7 @@ open a list when selected.
   - "ON" - Vertical space will be added between paragraphs in Reading Mode
   - "OFF" - Paragraphs will not have vertical space added, but will have first-line indentation
 
-- **Dictionary**: Select the StarDict dictionary used for word lookups while reading, or "None" to disable lookups. *(Only shown when at least one dictionary folder exists under `/dictionaries/` on the SD card — see [docs/dictionary.md](docs/dictionary.md) for setup and usage.)*
+- **Dictionary**: Select the StarDict dictionary used for word lookups while reading, or "None" to disable lookups. *(Only shown when at least one dictionary folder exists under `/dictionaries/` or `/.dictionaries/` on the SD card — see [docs/dictionary.md](docs/dictionary.md) for setup and usage.)*
 
 - **Text Anti-Aliasing**: Whether to show smooth grey edges (anti-aliasing) on text in reading mode. Note this slows down page turns slightly.
 
@@ -772,7 +772,7 @@ If the device goes to sleep or you close the book while viewing a footnote, the 
 
 ### Dictionary Lookup
 
-Words on the current page can be looked up in an offline StarDict dictionary stored on the SD card. Copy a dictionary to the `/dictionaries/` folder, select it in **Settings → Reader → Dictionary**, then start a lookup by choosing **Look Up** in the **[Reader Menu](#5-reader-menu)** (or by holding **Confirm**, if the **Long-press Menu** setting in **[Controls Settings](#363-controls)** is set to "Dictionary"). Use **Left/Right** to highlight a word and press **Confirm** to show its definition.
+Words on the current page can be looked up in an offline StarDict dictionary stored on the SD card. Copy a dictionary to the `/dictionaries/` folder (or `/.dictionaries/`, see [6.5](#65-dictionary-files-and-language-selection)), select it in **Settings → Reader → Dictionary**, then start a lookup by choosing **Look Up** in the **[Reader Menu](#5-reader-menu)** (or by holding **Confirm**, if the **Long-press Menu** setting in **[Controls Settings](#363-controls)** is set to "Dictionary"). Use **Left/Right** to highlight a word and press **Confirm** to show its definition.
 
 On a touch device you can skip all of that: **long-press a word on the page** and its definition opens directly, with no setting to turn on first. A press between words opens ordinary word selection instead. The definition card pages by touch the way the reader is set to turn pages in **Touch Reader Controls**, and a tap outside it puts it away.
 
@@ -915,7 +915,8 @@ Lookup** (the other settings keep the click for sleep, page turns, refresh or fo
 ### 6.3 Page Translation
 
 Reader menu → **Translate Page**, then wait for "Translating…". Up/Down scrolls, Back returns. Needs Wi-Fi and a
-Gemini API key in `/system/gemini.key`.
+Gemini API key in `/system/gemini.key`. The folder can also be called `/.system/`, which hides it from the file
+browser; when both exist, `/.system/` is used.
 
 ### 6.4 Reading Manga
 
@@ -968,6 +969,10 @@ folder per dictionary, with no conversion needed.
 The dictionary you choose in **Settings → Reader → Dictionary** is the fallback. It is used when the book carries
 no language, or when nothing under `dictionaries/` matches the one it carries. Reader Settings shows the
 dictionary a book actually ended up with, which is the quickest way to check a tag is being read.
+
+The folder can also be called `.dictionaries/`, which keeps it out of the file browser. Everything above works the
+same there, including `jp/`. When both exist, StarDict dictionaries are picked up from either folder, while Japanese
+uses `.dictionaries/jp/` if it is present.
 
 A flat pile of dictionary files directly under `dictionaries/`, and the older `dict/` folder, both still work.
 

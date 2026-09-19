@@ -19,4 +19,6 @@ inline std::string path(const char* leaf) {
   return out;
 }
 
+inline std::string findUserFile(const char* leaf) { return path(leaf); }
+
 }  // namespace sdsystem
