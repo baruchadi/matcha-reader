@@ -6,7 +6,7 @@ It includes all features of upstream CrossPoint and runs on any supported ESP32 
 
 <p align="center">
   <img src="docs/images/screenshots/vertical-text.png" width="200" alt="Vertical Japanese text">
-  <img src="docs/images/screenshots/word-lookup.png" width="200" alt="Dictionary word lookup">
+  <img src="docs/images/screenshots/word-lookup.png" width="200" alt="Dictionary word lookup panel">
   <img src="docs/images/screenshots/manga-full-page.png" width="200" alt="Manga reader with panel detection">
   <img src="docs/images/screenshots/language-stats.png" width="200" alt="Reading stats split by language">
 </p>
@@ -47,7 +47,7 @@ In French books, a literary verb-subject inversion like `songeai-je` or `pense-t
 
 Reader Settings includes **Word Lookup Font Size** (Tiny, Small, Medium or Large) for adjusting dictionary entry text.
 
-<p align="center"><img src="docs/images/screenshots/word-lookup.png" width="260" alt="Word lookup with reading, part of speech, definitions and an example sentence"></p>
+<p align="center"><img src="docs/images/screenshots/word-lookup.png" width="260" alt="Word lookup panel over a vertical page: 漏らした resolved to 漏らす, with its reading, part of speech, definitions and an example sentence"></p>
 
 ### Page translation
 
