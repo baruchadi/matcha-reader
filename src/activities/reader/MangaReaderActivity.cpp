@@ -33,6 +33,7 @@
 #include "ReadingStatsStore.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
+#include "WordSelectionScan.h"
 #include "activities/settings/SettingsActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -590,6 +591,8 @@ void MangaReaderActivity::loop() {
     return;
   }
 
+  if (wordSelect_ && handleWordSelectInput()) return;
+
   if (showBookmarkMessage && (millis() - bookmarkMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
     showBookmarkMessage = false;
     requestUpdate();
@@ -959,6 +962,8 @@ void MangaReaderActivity::renderFullPage() {
     renderer.setRenderMode(GfxRenderer::BW);
     decoder->decodeToFramebuffer(imgPath, renderer, config);
 
+    drawWordOutline();
+
     char bwStatus[32];
     snprintf(bwStatus, sizeof(bwStatus), "%u/%u", currentPage + 1, book->getPageCount());
     const int bwStatusW = renderer.getTextWidth(SMALL_FONT_ID, bwStatus);
@@ -992,6 +997,8 @@ void MangaReaderActivity::renderFullPage() {
     decoder->decodeToFramebuffer(imgPath, renderer, config);
     if (useCache) cache.open(cachePath);
   }
+
+  drawWordOutline();
 
   // Status bar: page number
   char statusBuf[32];
@@ -1178,6 +1185,8 @@ void MangaReaderActivity::renderPanelZoom() {
     decoder->decodeToFramebuffer(panelImgPath, renderer, config);
     if (useCache) cache.open(cachePath);
   }
+
+  drawWordOutline();
 
   // Panel indicator and status
   char statusBuf[48];
@@ -1643,6 +1652,9 @@ void MangaReaderActivity::launchWordLookupCurrentView() {
   // combine every panel's text on the page so lookup still works
   // without having to zoom into each panel individually.
   if (!book || !DictIndex::isAvailable()) return;
+  // With line geometry the page itself becomes the selector; the text-only panel remains for
+  // volumes converted before line boxes existed.
+  if (enterWordSelect()) return;
   std::string combined;
   for (const auto* tb : viewTextBlocks()) {
     if (!combined.empty()) combined += '\n';
@@ -2241,4 +2253,200 @@ ScreenshotInfo MangaReaderActivity::getScreenshotInfo() const {
         book->getPageCount() > 0 ? static_cast<int>((currentPage + 1) * 100 / book->getPageCount()) : 0;
   }
   return info;
+}
+
+bool MangaReaderActivity::enterWordSelect() {
+  if (!displayedMap_.valid) return false;
+  const auto blocks = viewTextBlocks();
+
+  // Every character of the view text gets the cell it is set in: a line's length split evenly into
+  // its cells (see lineCells()), each cell covering one character or one upright run.
+  std::string text;
+  std::vector<GlyphCell> cells;
+  bool anyGeometry = false;
+  for (size_t b = 0; b < blocks.size(); b++) {
+    const auto& block = *blocks[b];
+    if (!text.empty()) text += '\n';
+    text += block.text;
+    std::vector<uint32_t> line;
+    int lineIndex = 0;
+    auto flushLine = [&] {
+      if (line.empty()) return;
+      const bool hasBox = lineIndex < static_cast<int>(block.lines.size());
+      const auto lineCellStarts = lineCells(line);
+      const int n = static_cast<int>(lineCellStarts.size());
+      for (int k = 0; k < n; k++) {
+        const size_t end = k + 1 < n ? lineCellStarts[k + 1] : line.size();
+        GlyphCell cell;
+        if (hasBox) {
+          const auto& lb = block.lines[lineIndex];
+          cell.block = static_cast<int16_t>(b);
+          cell.line = static_cast<int16_t>(lineIndex);
+          if (block.vertical) {
+            cell.x = lb.x;
+            cell.w = lb.w;
+            cell.y = static_cast<uint16_t>(lb.y + k * lb.h / n);
+            cell.h = static_cast<uint16_t>(std::max(1, (k + 1) * lb.h / n - k * lb.h / n));
+          } else {
+            cell.y = lb.y;
+            cell.h = lb.h;
+            cell.x = static_cast<uint16_t>(lb.x + k * lb.w / n);
+            cell.w = static_cast<uint16_t>(std::max(1, (k + 1) * lb.w / n - k * lb.w / n));
+          }
+          anyGeometry = true;
+        }
+        for (size_t g = lineCellStarts[k]; g < end; g++) cells.push_back(cell);
+      }
+      line.clear();
+    };
+    for (const uint32_t cp : decodeUtf8(block.text)) {
+      if (cp == '\n') {
+        flushLine();
+        lineIndex++;
+      } else {
+        line.push_back(cp);
+      }
+    }
+    flushLine();
+  }
+  if (!anyGeometry) return false;
+
+  // The words themselves come from the same segmentation the lookup uses, so what is outlined is
+  // exactly what Confirm will look up. A view's text is a few bubbles: scanning it all is quick.
+  WordSelectionScan scan;
+  scan.initFromUtf8Text(text);
+  while (!scan.isDone()) scan.step(50);
+  std::vector<SelectWord> words;
+  for (size_t i = 0; i < scan.selectToAllIdx.size(); i++) {
+    const size_t start = scan.selectToAllIdx[i];
+    const size_t len = std::max<size_t>(scan.selectableGlyphs[i].matchLen, 1);
+    if (start >= cells.size() || cells[start].block < 0) continue;  // nothing to outline
+    words.push_back(SelectWord{static_cast<uint16_t>(start), static_cast<uint8_t>(std::min<size_t>(len, 255))});
+  }
+  if (words.empty()) return false;
+
+  {
+    RenderLock lock(*this);
+    selectText_ = std::move(text);
+    selectCells_ = std::move(cells);
+    selectWords_ = std::move(words);
+    selectCursor_ = 0;
+    selectPage_ = currentPage;
+    selectPanel_ = currentPanel;
+    wordSelect_ = true;
+  }
+  requestUpdate();
+  return true;
+}
+
+void MangaReaderActivity::exitWordSelect() {
+  {
+    RenderLock lock(*this);
+    wordSelect_ = false;
+    selectWords_.clear();
+    selectCells_.clear();
+    selectText_.clear();
+  }
+  requestUpdate();
+}
+
+bool MangaReaderActivity::handleWordSelectInput() {
+  if (!selectionIsCurrent()) {
+    // The page or panel changed under it (a gesture page turn, the menu): drop it quietly.
+    exitWordSelect();
+    return false;
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    exitWordSelect();
+    return true;
+  }
+  // Confirm, or the same shortcut that opened the selection (power click, a Word Lookup side
+  // button): look the outlined word up. Two presses in, as the book panel works.
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || ReaderUtils::wordLookupPowerClick(mappedInput) ||
+      ReaderUtils::wordLookupSideToggle(mappedInput)) {
+    lookUpSelectedWord();
+    return true;
+  }
+  // The keys that would turn the page move the outline instead -- exactly those keys, on exactly
+  // the same edge (press or release, per the long-press setting), and in the same direction the
+  // reader gives them, Reversed Page Turn included. Asking the reader's own detector is what makes
+  // that hold: a hand-picked button list reacted on release, while the page turn had already
+  // fired on the press and moved on to the next panel.
+  const auto turn =
+      ReaderUtils::detectPageTurnForOrientation(mappedInput, SETTINGS.reversePageTurn != 0, SETTINGS.orientation);
+  int step = turn.next ? 1 : (turn.prev ? -1 : 0);
+  if (step == 0) {
+    // The other axis steps too, so the pair that is not the page-turn pair is not a dead end.
+    using B = MappedInputManager::Button;
+    if (mappedInput.wasPressed(B::ScreenDown) || mappedInput.wasPressed(B::NavNext)) {
+      step = 1;
+    } else if (mappedInput.wasPressed(B::ScreenUp) || mappedInput.wasPressed(B::NavPrevious)) {
+      step = -1;
+    }
+  }
+  if (step != 0) {
+    const int count = static_cast<int>(selectWords_.size());
+    const int next = std::clamp(selectCursor_ + step, 0, count - 1);
+    if (next != selectCursor_) {
+      {
+        RenderLock lock(*this);
+        selectCursor_ = next;
+      }
+      requestUpdate();
+    }
+    return true;
+  }
+  // Every other input -- touch, the menu, page turns by gesture -- belongs to the reader as usual,
+  // except that turning the page or panel ends the selection (its words are no longer on screen).
+  return false;
+}
+
+void MangaReaderActivity::lookUpSelectedWord() {
+  // The lookup opens on this word; closing it returns here, still selecting, so the next word is
+  // one press away. launchWordLookupAt takes the text by value -- keep ours for the next pick.
+  const auto& word = selectWords_[static_cast<size_t>(selectCursor_)];
+  launchWordLookupAt(selectText_, word.glyph);
+}
+
+bool MangaReaderActivity::handleHomeGesture() {
+  if (!selectionIsCurrent()) return false;
+  lookUpSelectedWord();
+  return true;
+}
+
+void MangaReaderActivity::drawWordOutline() const {
+  if (!selectionIsCurrent() || selectWords_.empty()) return;
+  const HoldMap& m = displayedMap_;
+  if (!m.valid || m.sw <= 0 || m.sh <= 0) return;
+  const auto& word = selectWords_[static_cast<size_t>(std::clamp(selectCursor_, 0, (int)selectWords_.size() - 1))];
+
+  // One box per line the word is set on (a word can wrap to the next column), each the union of
+  // its characters' cells, mapped from the page image into the frame being drawn.
+  auto toX = [&](int px) { return m.dx + static_cast<int>(static_cast<int64_t>(px - m.sx) * m.dw / m.sw); };
+  auto toY = [&](int py) { return m.dy + static_cast<int>(static_cast<int64_t>(py - m.sy) * m.dh / m.sh); };
+  constexpr int kPad = 3;
+  constexpr int kLine = 2;
+  size_t g = word.glyph;
+  const size_t end = std::min(selectCells_.size(), static_cast<size_t>(word.glyph) + word.len);
+  while (g < end) {
+    const GlyphCell& first = selectCells_[g];
+    if (first.block < 0) {
+      g++;
+      continue;
+    }
+    int x1 = first.x, y1 = first.y, x2 = first.x + first.w, y2 = first.y + first.h;
+    size_t h = g + 1;
+    while (h < end && selectCells_[h].block == first.block && selectCells_[h].line == first.line) {
+      const GlyphCell& c = selectCells_[h];
+      x1 = std::min<int>(x1, c.x);
+      y1 = std::min<int>(y1, c.y);
+      x2 = std::max<int>(x2, c.x + c.w);
+      y2 = std::max<int>(y2, c.y + c.h);
+      h++;
+    }
+    const int sx1 = toX(x1) - kPad, sy1 = toY(y1) - kPad;
+    const int sx2 = toX(x2) + kPad, sy2 = toY(y2) + kPad;
+    renderer.drawRect(sx1, sy1, sx2 - sx1, sy2 - sy1, kLine, true);
+    g = h;
+  }
 }

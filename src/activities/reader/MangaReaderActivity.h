@@ -112,6 +112,44 @@ class MangaReaderActivity final : public Activity {
   // plus the character index inside it. False when no line is near enough to mean anything.
   bool holdTarget(int x, int y, std::string& text, int& glyph) const;
   void launchWordLookupAt(std::string text, int glyph);
+
+  // Word selection on the page itself: the page stays on screen with an outline around one word,
+  // stepped with the buttons, and Confirm looks it up -- the hold's precision for boards (and
+  // readers) without touch. An outline rather than an inverted block, so the word stays legible.
+  // Only for views whose text carries v3 line boxes; older volumes keep the text-only lookup.
+  // All of it is written by the main task under the render lock and read by render().
+  struct SelectWord {
+    uint16_t glyph;  // first character in selectText_ (line breaks not counted)
+    uint8_t len;     // characters the dictionary match covers
+  };
+  struct GlyphCell {
+    int16_t block = -1;  // which text block and line the character is set in; -1 = no geometry
+    int16_t line = -1;
+    uint16_t x = 0, y = 0, w = 0, h = 0;  // its cell on the page image
+  };
+  bool wordSelect_ = false;
+  std::string selectText_;
+  std::vector<SelectWord> selectWords_;
+  std::vector<GlyphCell> selectCells_;
+  int selectCursor_ = 0;
+  // The view the words were collected from. Turning the page or panel leaves the selection: its
+  // words are no longer on screen, and an outline must never land on the next view's artwork.
+  uint32_t selectPage_ = 0;
+  int selectPanel_ = -1;
+  bool selectionIsCurrent() const { return wordSelect_ && selectPage_ == currentPage && selectPanel_ == currentPanel; }
+  // Builds the view's words and character cells and enters the mode; false when the view has no
+  // line geometry (or no dictionary words), so the caller can fall back to the text-only lookup.
+  bool enterWordSelect();
+  // Looks the outlined word up; the selection stays, so closing the lookup returns to it.
+  void lookUpSelectedWord();
+  // While words are being selected, the Home key picks the outlined one: on the X4 Pro it is the
+  // only front key, and leaving for Home mid-selection is what Back is for.
+  bool handleHomeGesture() override;
+  void exitWordSelect();
+  // True when the mode consumed this tick's input.
+  bool handleWordSelectInput();
+  // Outline around the selected word, in the frame the page is being drawn in. Render task only.
+  void drawWordOutline() const;
   std::vector<const manga::TextBlock*> viewTextBlocks() const;
 
   FullPageGeom applyFullPageGeometry(int imgWidth, int imgHeight);

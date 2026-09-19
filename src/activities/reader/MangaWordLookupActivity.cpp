@@ -215,11 +215,35 @@ void MangaWordLookupActivity::performLookupImpl() {
   std::string text = buildLookupText(static_cast<size_t>(cursorIndex));
   if (text.empty()) return;
 
+  // A number is selected together with its counter (360度, ３人) -- the scan's selectable entry
+  // starts at the digits -- but the dictionary knows the counter, not "360度". Look up what
+  // follows the digits and show the digits as a prefix, as the book panel does. Without this every
+  // number-plus-counter word in manga answered "No match found".
+  std::string digitPrefix;
+  {
+    size_t b = 0;
+    while (b < text.size()) {
+      const auto c = static_cast<unsigned char>(text[b]);
+      if (c >= '0' && c <= '9') {
+        b += 1;
+      } else if (c == 0xEF && b + 2 < text.size() && static_cast<unsigned char>(text[b + 1]) == 0xBC &&
+                 static_cast<unsigned char>(text[b + 2]) >= 0x90 && static_cast<unsigned char>(text[b + 2]) <= 0x99) {
+        b += 3;  // fullwidth ０-９
+      } else {
+        break;
+      }
+    }
+    if (b > 0 && b < text.size()) {
+      digitPrefix = text.substr(0, b);
+      text = text.substr(b);
+    }
+  }
+
   WordLookupResult result;
   if (WordLookup::lookup(text, 0, result)) {
     WordSelectionScan::stripTrailingParticle(text, result);
     hasResult = true;
-    resultHeadword = result.entry.headword;
+    resultHeadword = digitPrefix + result.entry.headword;
     resultDefinition = std::move(result.entry.definition);
     DefinitionText::EntryMetadata metadata;
     DefinitionText::extractEntryMetadata(resultDefinition, resultHeadword, metadata);
