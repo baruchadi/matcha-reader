@@ -303,6 +303,25 @@ inline bool isTouchMenuTap(const GfxRenderer& renderer, const MappedInputManager
 // actions are configured separately from screen gestures.
 // Menu gestures honor showReaderMenu independently of touchReaderControls,
 // which only gates page-turn touch zones in detectTouchPageTurn().
+// A vertical swipe inside a dictionary panel: +1 to read further down a long entry (finger moves
+// up, as when scrolling on a phone), -1 to go back up, 0 otherwise. Independent of
+// touchReaderControls on purpose -- that setting chooses how PAGES turn, and scrolling an entry
+// that does not fit is a different gesture that should work whatever it is set to. Horizontal
+// swipes are left to detectTouchPageTurn, and edge-anchored swipes to their own gestures (Home,
+// menu, light panel), so neither is stolen here.
+inline int definitionScrollSwipe(const MappedInputManager& input) {
+  if (!input.hasTouch()) return 0;
+  if (input.wasHomeGesture() || input.wasMenuGesture() || input.wasLightPanelGesture()) return 0;
+  switch (input.wasSwipe()) {
+    case MappedInputManager::SwipeDir::Up:
+      return 1;
+    case MappedInputManager::SwipeDir::Down:
+      return -1;
+    default:
+      return 0;
+  }
+}
+
 inline bool isTouchMenuGesture(const GfxRenderer& renderer, const MappedInputManager& input) {
   if (!input.hasTouch()) return false;
   if (input.wasMenuGesture()) return true;

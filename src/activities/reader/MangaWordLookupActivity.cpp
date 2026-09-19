@@ -10,6 +10,8 @@
 #include <SdCardFontSystem.h>
 #include <WordLookup.h>
 
+#include <algorithm>
+
 #include "CrossPointSettings.h"
 #include "DefinitionTextRenderer.h"
 #include "MappedInputManager.h"
@@ -371,6 +373,43 @@ void MangaWordLookupActivity::loop() {
       sideButtonsForLookup ? MappedInputManager::Button::ScreenRight : MappedInputManager::Button::ScreenDown;
   const auto scrollUpButton =
       sideButtonsForLookup ? MappedInputManager::Button::ScreenLeft : MappedInputManager::Button::ScreenUp;
+  // Outside the card is "put it away", as in the English and Japanese panels: the card floats
+  // over the page, so a tap around it reads as dismissing it. Checked before the paging below so
+  // the two cannot both claim one contact.
+  int tapX = 0;
+  int tapY = 0;
+  if (mappedInput.hasTouch() && mappedInput.wasScreenTapped(tapX, tapY)) {
+    const auto box = DictionaryPanel::compute(renderer).box;
+    if (tapX < box.x || tapX >= box.x + box.width || tapY < box.y || tapY >= box.y + box.height) {
+      ActivityResult result;
+      result.isCancelled = true;
+      setResult(std::move(result));
+      finish();
+      return;
+    }
+  }
+
+  // Tap zones, inverted zones, swipes or inverted swipes -- whatever the reader is set to, through
+  // the same helper the page turns and the other panels use. A turn steps to the previous/next
+  // word, as this panel's own left/right buttons do: the entry itself scrolls on the vertical
+  // swipe below.
+  const auto touchTurn = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
+  if (touchTurn.prev || touchTurn.next) {
+    moveCursor(touchTurn.next ? 1 : -1);
+    return;
+  }
+
+  // Up/down swipes scroll a long definition a screenful at a time, whatever the page-turn setting
+  // says -- the same gesture as the EPUB panels.
+  if (const int scroll = ReaderUtils::definitionScrollSwipe(mappedInput)) {
+    const int target = std::clamp(scrollOffset + scroll * visibleCapacity, 0, maxScroll);
+    if (hasResult && target != scrollOffset) {
+      scrollOffset = target;
+      requestUpdate();
+    }
+    return;
+  }
+
   buttonNavigator.onPressAndContinuous({nextEntryButton}, [this] { moveCursor(1); });
   buttonNavigator.onPressAndContinuous({previousEntryButton}, [this] { moveCursor(-1); });
   buttonNavigator.onPressAndContinuous({scrollDownButton}, [this] {
@@ -451,7 +490,7 @@ void MangaWordLookupActivity::renderContentArea(const Rect& body) {
                                                 maxDefY, definitionScroll, defScale);
 
   totalLines = metadataLines + wrap.totalLines;
-  const int visibleCapacity = body.height / defLineH;
+  visibleCapacity = std::max(1, body.height / defLineH);
   maxScroll = std::max(0, totalLines - visibleCapacity);
 }
 

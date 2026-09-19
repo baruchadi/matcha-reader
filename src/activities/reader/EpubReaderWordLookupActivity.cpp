@@ -1470,12 +1470,28 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
     }
   }
 
-  // Paging follows whatever the reader is set to -- tap zones, inverted zones, swipes, inverted
-  // swipes, or nothing when touch reader controls are off -- rather than a second scheme to
-  // learn (#278). Same helper the page turns use, and the same one the English panel calls.
+  // Two axes, two jobs -- the same split the buttons below make. Up/down swipes scroll within the
+  // entry on screen, whatever the page-turn setting says, and stop at its ends. Left/right follows
+  // the reader's page-turn setting (tap zones, inverted zones, swipes, inverted swipes, or nothing
+  // when touch controls are off) and turns to the neighbouring entry page: the next source in the
+  // paged view, the next word otherwise. A turn never scrolls, and a scroll never turns.
+  if (const int scroll = ReaderUtils::definitionScrollSwipe(mappedInput)) {
+    const int target = std::clamp(scrollOffset + scroll * std::max(1, visibleCapacity), 0, maxScroll);
+    if (hasResult && target != scrollOffset) {
+      scrollOffset = target;
+      requestUpdate();
+    }
+    return false;
+  }
+
   const auto touchTurn = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
   if (touchTurn.prev || touchTurn.next) {
-    stepDefinitionPage(touchTurn.next ? 1 : -1);
+    const int delta = touchTurn.next ? 1 : -1;
+    if (pagedDefinition()) {
+      moveSection(delta);
+    } else {
+      moveCursor(delta);
+    }
     return false;
   }
 
@@ -1554,23 +1570,6 @@ bool EpubReaderWordLookupActivity::handleDefinitionInput() {
     }
   });
   return true;
-}
-
-// One screenful of the entry in `delta`'s direction, rolling on to the neighbouring source when
-// the current one runs out -- so a touch gesture walks the whole lookup, sources included, the
-// way the English panel's pages do.
-void EpubReaderWordLookupActivity::stepDefinitionPage(const int delta) {
-  if (!hasResult) return;
-  const int step = std::max(1, visibleCapacity);
-  const int target = scrollOffset + delta * step;
-  if (target >= 0 && target <= maxScroll && (delta > 0 ? scrollOffset < maxScroll : scrollOffset > 0)) {
-    scrollOffset = std::clamp(target, 0, maxScroll);
-    requestUpdate();
-    return;
-  }
-  // At the end of this source: the next one, if the entry has several. moveSection() is a hard
-  // stop at both ends, so the last page of the last source simply stays put.
-  moveSection(delta);
 }
 
 void EpubReaderWordLookupActivity::moveSection(const int delta) {

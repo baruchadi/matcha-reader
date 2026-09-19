@@ -265,8 +265,6 @@ class EpubReaderWordLookupActivity final : public Activity {
   int currentSection = 0;
   void splitDefinitionIntoSections();
   void moveSection(int delta);
-  // A screenful of the definition per touch gesture, continuing into the next/previous source.
-  void stepDefinitionPage(int delta);
   // Text and footer label for what is on screen: the current section in tategaki, the whole
   // merged definition otherwise.
   const std::string& visibleDefinition() const;

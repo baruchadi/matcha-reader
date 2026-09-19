@@ -41,6 +41,8 @@ class MangaWordLookupActivity final : public Activity {
   int scrollOffset = 0;
   int totalLines = 0;
   int maxScroll = 0;
+  // Body lines that fit at once, from the last render: the step a swipe scrolls by.
+  int visibleCapacity = 1;
 
   ButtonNavigator buttonNavigator;
 
