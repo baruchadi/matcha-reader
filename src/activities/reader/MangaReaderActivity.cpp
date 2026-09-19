@@ -754,6 +754,14 @@ void MangaReaderActivity::loop() {
 void MangaReaderActivity::render(RenderLock&&) {
   if (!book) return;
 
+  if (outlineOnlyUpdate_) {
+    outlineOnlyUpdate_ = false;
+    if (updateOutlineInPlace()) return;
+  }
+  // Any other render repaints the screen; a page render re-arms both in drawWordOutline().
+  pageInFramebuffer_ = false;
+  drawnOutline_.clear();
+
   if (renderEndOfBook()) return;
 
   switch (viewMode) {
@@ -1652,7 +1660,13 @@ void MangaReaderActivity::launchWordLookupCurrentView() {
   // In panel zoom, look up just that panel's text. In full-page view,
   // combine every panel's text on the page so lookup still works
   // without having to zoom into each panel individually.
-  if (!book || !DictIndex::isAvailable()) return;
+  if (!book) return;
+  if (!DictIndex::isAvailable()) {
+    LOG_ERR("MANGA", "Word lookup: no Japanese dictionary (%s / %s)", DictIndex::vocabIdxPath(),
+            DictIndex::vocabDatPath());
+    return;
+  }
+  LOG_DBG("MANGA", "Word lookup: page %u panel %d", static_cast<unsigned>(currentPage), currentPanel);
   // With line geometry the page itself becomes the selector; the text-only panel remains for
   // volumes converted before line boxes existed.
   if (enterWordSelect()) return;
@@ -2338,15 +2352,17 @@ bool MangaReaderActivity::enterWordSelect() {
     selectPage_ = currentPage;
     selectPanel_ = currentPanel;
     wordSelect_ = true;
+    outlineOnlyUpdate_ = true;
   }
   requestUpdate();
   return true;
 }
 
-void MangaReaderActivity::exitWordSelect() {
+void MangaReaderActivity::exitWordSelect(const bool inPlace) {
   {
     RenderLock lock(*this);
     wordSelect_ = false;
+    outlineOnlyUpdate_ = inPlace;
     selectWords_.clear();
     selectCells_.clear();
     selectText_.clear();
@@ -2356,12 +2372,13 @@ void MangaReaderActivity::exitWordSelect() {
 
 bool MangaReaderActivity::handleWordSelectInput() {
   if (!selectionIsCurrent()) {
-    // The page or panel changed under it (a gesture page turn, the menu): drop it quietly.
-    exitWordSelect();
+    // The page or panel changed under it (a gesture page turn, the menu): drop it quietly. That
+    // change already asked for a full render, which an outline-only update must not replace.
+    exitWordSelect(/*inPlace=*/false);
     return false;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    exitWordSelect();
+    exitWordSelect(/*inPlace=*/true);
     return true;
   }
   // Confirm, or the same shortcut that opened the selection (power click, a Word Lookup side
@@ -2395,6 +2412,7 @@ bool MangaReaderActivity::handleWordSelectInput() {
       {
         RenderLock lock(*this);
         selectCursor_ = next;
+        outlineOnlyUpdate_ = true;
       }
       requestUpdate();
     }
@@ -2418,18 +2436,24 @@ bool MangaReaderActivity::handleHomeGesture() {
   return true;
 }
 
-void MangaReaderActivity::drawWordOutline() const {
+void MangaReaderActivity::drawWordOutline() {
+  pageInFramebuffer_ = true;
+  drawnOutline_.clear();
   if (!selectionIsCurrent() || selectWords_.empty()) return;
+  outlineBoxes(std::clamp(selectCursor_, 0, static_cast<int>(selectWords_.size()) - 1), drawnOutline_);
+  invertBoxes(drawnOutline_);
+}
+
+void MangaReaderActivity::outlineBoxes(const int cursor, std::vector<OutlineBox>& out) const {
   const HoldMap& m = displayedMap_;
-  if (!m.valid || m.sw <= 0 || m.sh <= 0) return;
-  const auto& word = selectWords_[static_cast<size_t>(std::clamp(selectCursor_, 0, (int)selectWords_.size() - 1))];
+  if (!m.valid || m.sw <= 0 || m.sh <= 0 || cursor < 0 || cursor >= static_cast<int>(selectWords_.size())) return;
+  const auto& word = selectWords_[static_cast<size_t>(cursor)];
 
   // One box per line the word is set on (a word can wrap to the next column), each the union of
   // its characters' cells, mapped from the page image into the frame being drawn.
   auto toX = [&](int px) { return m.dx + static_cast<int>(static_cast<int64_t>(px - m.sx) * m.dw / m.sw); };
   auto toY = [&](int py) { return m.dy + static_cast<int>(static_cast<int64_t>(py - m.sy) * m.dh / m.sh); };
   constexpr int kPad = 3;
-  constexpr int kLine = 2;
   size_t g = word.glyph;
   const size_t end = std::min(selectCells_.size(), static_cast<size_t>(word.glyph) + word.len);
   while (g < end) {
@@ -2449,8 +2473,37 @@ void MangaReaderActivity::drawWordOutline() const {
       h++;
     }
     const int sx1 = toX(x1) - kPad, sy1 = toY(y1) - kPad;
-    const int sx2 = toX(x2) + kPad, sy2 = toY(y2) + kPad;
-    renderer.drawRect(sx1, sy1, sx2 - sx1, sy2 - sy1, kLine, true);
+    out.push_back({static_cast<int16_t>(sx1), static_cast<int16_t>(sy1), static_cast<int16_t>(toX(x2) + kPad - sx1),
+                   static_cast<int16_t>(toY(y2) + kPad - sy1)});
     g = h;
   }
+}
+
+void MangaReaderActivity::invertBoxes(const std::vector<OutlineBox>& boxes) const {
+  constexpr int kLine = 2;
+  for (const auto& b : boxes) {
+    // Four strips that never overlap: a corner inverted twice would cancel out.
+    renderer.invertRect(b.x, b.y, b.w, kLine);
+    renderer.invertRect(b.x, b.y + b.h - kLine, b.w, kLine);
+    renderer.invertRect(b.x, b.y + kLine, kLine, b.h - 2 * kLine);
+    renderer.invertRect(b.x + b.w - kLine, b.y + kLine, kLine, b.h - 2 * kLine);
+  }
+}
+
+bool MangaReaderActivity::updateOutlineInPlace() {
+  if (!pageInFramebuffer_) return false;
+  std::vector<OutlineBox> next;
+  if (selectionIsCurrent() && !selectWords_.empty()) {
+    outlineBoxes(std::clamp(selectCursor_, 0, static_cast<int>(selectWords_.size()) - 1), next);
+  }
+  if (drawnOutline_.empty() && next.empty()) return true;
+  // The boxes are in the page's frame, which a rotated page sets up for its whole render.
+  const auto saved = renderer.getOrientation();
+  if (displayedRotated_) renderer.setOrientation(static_cast<GfxRenderer::Orientation>((saved + 3) % 4));
+  invertBoxes(drawnOutline_);  // XOR: restores the page under the old outline exactly
+  invertBoxes(next);
+  drawnOutline_ = std::move(next);
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  if (displayedRotated_) renderer.setOrientation(saved);
+  return true;
 }

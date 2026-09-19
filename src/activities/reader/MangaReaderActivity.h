@@ -145,11 +145,32 @@ class MangaReaderActivity final : public Activity {
   // While words are being selected, the Home key picks the outlined one: on the X4 Pro it is the
   // only front key, and leaving for Home mid-selection is what Back is for.
   bool handleHomeGesture() override;
-  void exitWordSelect();
+  // inPlace erases just the outline; pass false when the view changed and a full render is coming.
+  void exitWordSelect(bool inPlace);
   // True when the mode consumed this tick's input.
   bool handleWordSelectInput();
   // Outline around the selected word, in the frame the page is being drawn in. Render task only.
-  void drawWordOutline() const;
+  // The outline is XOR-inverted into the framebuffer rather than drawn in black: it stays visible
+  // over black ink, and inverting the same boxes again restores the page exactly. That is what
+  // lets entering, moving and leaving the selection update only the outline -- one FAST wave, no
+  // decode and no grayscale passes, so the image on the glass keeps its gray levels.
+  struct OutlineBox {
+    int16_t x, y, w, h;
+  };
+  // Records that the framebuffer holds this page render, then outlines the current word into it.
+  void drawWordOutline();
+  void outlineBoxes(int cursor, std::vector<OutlineBox>& out) const;
+  void invertBoxes(const std::vector<OutlineBox>& boxes) const;
+  // Swaps the drawn outline for the current one in place. False when the framebuffer does not hold
+  // the page (the caller then renders in full).
+  bool updateOutlineInPlace();
+  // The boxes currently inverted into the framebuffer. Kept apart from selectWords_ so the outline
+  // can still be erased after leaving the selection has cleared the words.
+  std::vector<OutlineBox> drawnOutline_;
+  // True while the framebuffer holds the page the last render drew, with drawnOutline_ on it.
+  bool pageInFramebuffer_ = false;
+  // Set by entering, moving or leaving the selection: the next render only swaps the outline.
+  bool outlineOnlyUpdate_ = false;
   std::vector<const manga::TextBlock*> viewTextBlocks() const;
 
   FullPageGeom applyFullPageGeometry(int imgWidth, int imgHeight);

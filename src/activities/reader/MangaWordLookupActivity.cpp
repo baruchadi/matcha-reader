@@ -592,17 +592,9 @@ void MangaWordLookupActivity::render(RenderLock&&) {
   DictionaryPanel::clearButtonHints(renderer);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  if (!initialRenderDone) {
-    renderer.displayBuffer();
-    initialRenderDone = true;
-    fastRefreshCount = 0;
-  } else {
-    fastRefreshCount++;
-    if (fastRefreshCount >= kFullRefreshInterval) {
-      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
-      fastRefreshCount = 0;
-    } else {
-      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-    }
-  }
+  // FAST only, the first render included. The framebuffer holds just the page's BW plane -- its
+  // grays exist only on the glass -- so a full or half refresh would repaint the whole manga page
+  // from that plane: a black flash, then the image in a different tone. A FAST wave drives only the
+  // pixels that change, the panel's, and leaves the page around it as it was.
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 }

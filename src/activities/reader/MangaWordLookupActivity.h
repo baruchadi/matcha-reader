@@ -68,10 +68,6 @@ class MangaWordLookupActivity final : public Activity {
   bool lookupInFlight = false;
   std::string buildLookupText(size_t startIdx) const;
 
-  bool initialRenderDone = false;
-  int fastRefreshCount = 0;
-  static constexpr int kFullRefreshInterval = 10;
-
   // Draws the definition text (or the loading/no-match notice) into the panel's inner rectangle.
   void renderContentArea(const Rect& body);
 
