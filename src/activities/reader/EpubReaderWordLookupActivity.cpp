@@ -863,10 +863,39 @@ int EpubReaderWordLookupActivity::buildBoxesFor(const int selectableIndex, Highl
 }
 
 bool EpubReaderWordLookupActivity::resolveOpenPoint() {
-  const int hit = selectableIndexAtPoint(openAtX, openAtY);
-  if (hit < 0) return false;  // not segmented there yet (or no word at all) -- retried from loop()
+  // A fingertip is not a stylus. Only dictionary-matched spans are selectable here -- unlike
+  // English, where every word is -- so a hold that lands on a gutter, on furigana (drawn outside
+  // the cell), or on a particle between two matches hits nothing exactly. On the device that was
+  // most holds, and they fell back to a cursor in the middle of the page (#278 follow-up).
+  int hit = selectableIndexAtPoint(openAtX, openAtY);
+  bool openDefinition = hit >= 0;
+  if (hit < 0) {
+    // Snap only once the page is fully mapped: before that, the word the finger is really on may
+    // simply not be segmented yet, and snapping would pick its already-mapped neighbour.
+    if (!scan.isDone()) return false;
+    int distance = 0;
+    hit = nearestSelectableToPoint(openAtX, openAtY, distance);
+    // Nothing selectable on the page at all: leave the panel where the caller put it.
+    if (hit < 0) {
+      openAtX = -1;
+      openAtY = -1;
+      return false;
+    }
+    // Within about a character of a word the intent is unambiguous, so look it up. Further out
+    // (a margin, a blank line), put the cursor on the nearest word WITHOUT opening it, so the
+    // reader sees where the hold landed and one tap finishes the job -- never the page middle.
+    openDefinition = distance <= std::max(1, selectCtx.cellPx);
+  }
   openAtX = -1;
   openAtY = -1;
+  if (!openDefinition) {
+    pending.kind = PendingMove::Kind::None;
+    provisionalGlyph = SIZE_MAX;
+    cursorIndex = hit;
+    refreshCursorBoxes();
+    requestUpdate();
+    return true;
+  }
   // Same as a tap in select mode: the point names its target, so no parked move can be holding
   // a different word that a lookup would wrongly read.
   pending.kind = PendingMove::Kind::None;
@@ -875,6 +904,31 @@ bool EpubReaderWordLookupActivity::resolveOpenPoint() {
   refreshCursorBoxes();
   enterDefinition();
   return true;
+}
+
+int EpubReaderWordLookupActivity::nearestSelectableToPoint(const int x, const int y, int& outDistance) const {
+  // Same boxes as the hit test and the highlight (buildBoxesFor), measured as the gap from the
+  // point to the nearest edge -- 0 inside. Chebyshev rather than Euclidean: the cell grid is
+  // square, and "within one cell" should mean the same thing along a column and across one.
+  HighlightBox boxes[kMaxHighlightBoxes];
+  int best = -1;
+  int bestDistance = INT_MAX;
+  const int total = static_cast<int>(scan.selectToAllIdx.size());
+  for (int idx = 0; idx < total; idx++) {
+    const int count = buildBoxesFor(idx, boxes);
+    for (int b = 0; b < count; b++) {
+      const HighlightBox& box = boxes[b];
+      const int dx = x < box.x ? box.x - x : (x >= box.x + box.w ? x - (box.x + box.w - 1) : 0);
+      const int dy = y < box.y ? box.y - y : (y >= box.y + box.h ? y - (box.y + box.h - 1) : 0);
+      const int distance = std::max(dx, dy);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = idx;
+      }
+    }
+  }
+  outDistance = bestDistance;
+  return best;
 }
 
 int EpubReaderWordLookupActivity::selectableIndexAtPoint(const int x, const int y) const {
@@ -1335,12 +1389,9 @@ void EpubReaderWordLookupActivity::loop() {
   // The word under the opening long press, as soon as the scan can name it. Before input, so a
   // page that segments mid-tick opens its definition on this tick rather than the next.
   if (openAtX >= 0 && mode == Mode::Select) {
-    if (resolveOpenPoint()) return;
-    // The whole page is mapped and nothing lives under that point (a margin, a gutter, an image).
-    // Stop retrying and leave the panel on the page, where the cursor can still be moved.
-    if (scan.isDone()) {
-      openAtX = -1;
-      openAtY = -1;
+    if (resolveOpenPoint() && mode == Mode::Definition) return;
+    // A page with nothing selectable on it at all: the cursor goes where the key paths put it.
+    if (openAtX < 0 && cursorBoxCount == 0) {
       selectMiddleOfPage();
       refreshCursorBoxes();
       requestUpdate();
