@@ -182,6 +182,9 @@ class EpubReaderWordLookupActivity final : public Activity {
   // Selectable index whose word covers the screen point, or -1 for a tap that missed every word
   // (a gutter, a margin, unscanned text). Main task only.
   int selectableIndexAtPoint(int x, int y) const;
+  // Selectable index whose boxes lie closest to the point, with that gap in pixels (0 = inside).
+  // -1 when the page has no selectable words. Main task only.
+  int nearestSelectableToPoint(int x, int y, int& outDistance) const;
   // Rebuild cursorBoxes for the current cursor. Main task only (it reads the scan vectors).
   // A match that wraps from the foot of one column to the head of the next becomes one box per
   // column, so the highlight never covers the gutter between them.
