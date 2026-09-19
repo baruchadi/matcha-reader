@@ -11,6 +11,7 @@
 #include <WordLookup.h>
 
 #include <algorithm>
+#include <cstdint>
 
 #include "CrossPointSettings.h"
 #include "DefinitionTextRenderer.h"
@@ -22,8 +23,10 @@
 
 MangaWordLookupActivity::MangaWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                  const std::string& panelText, std::string scanCachePath,
-                                                 const uint16_t pageIndex, const uint16_t panelIndex)
+                                                 const uint16_t pageIndex, const uint16_t panelIndex,
+                                                 const int targetGlyph)
     : Activity("MangaWordLookup", renderer, mappedInput),
+      targetGlyph(targetGlyph),
       scanCachePath(std::move(scanCachePath)),
       scanPage(pageIndex),
       scanPanel(panelIndex) {
@@ -69,6 +72,17 @@ void MangaWordLookupActivity::onEnter() {
   Activity::onEnter();
   // Heap telemetry for the word-lookup OOM crash hunt -- see EpubReaderWordLookupActivity.
   LOG_INF("MWLA", "onEnter heap: free=%u maxAlloc=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+  // A hold on the page names its own character, which beats both the remembered position and the
+  // first match: the reader pointed at something.
+  if (targetGlyph >= 0) {
+    const int hit = selectableForGlyph(static_cast<size_t>(targetGlyph));
+    if (hit >= 0) {
+      cursorIndex = hit;
+      performLookup();
+      requestUpdate();
+      return;
+    }
+  }
   // A scan-cache hit remembers the last cursor position for this exact panel/page text -- see
   // EpubReaderWordLookupActivity::onEnter().
   if (scan.restoredCursorIndex != WordSelectionScan::kNoRestoredCursor &&
@@ -85,6 +99,30 @@ void MangaWordLookupActivity::onEnter() {
   }
   if (cursorIndex > maxIdx) cursorIndex = 0;
   requestUpdate();
+}
+
+int MangaWordLookupActivity::selectableForGlyph(const size_t glyph) {
+  // Segmentation is sequential, so the word covering `glyph` is known once the scan has mapped a
+  // word starting past it (or finished). A view's text is a few bubbles, so this is short --
+  // moveCursor() scans ahead synchronously the same way.
+  auto mappedPast = [&] { return !scan.selectToAllIdx.empty() && scan.selectToAllIdx.back() > glyph; };
+  while (!scan.isDone() && !mappedPast()) scan.step(50);
+
+  int nearest = -1;
+  size_t nearestDistance = SIZE_MAX;
+  for (size_t i = 0; i < scan.selectToAllIdx.size(); i++) {
+    const size_t start = scan.selectToAllIdx[i];
+    const size_t span = std::max<size_t>(scan.selectableGlyphs[i].matchLen, 1);
+    if (glyph >= start && glyph < start + span) return static_cast<int>(i);
+    // A character no word covers (punctuation, a particle the dictionary skipped): the closest
+    // word by position, preferring the one it ends -- the same snap the book panel makes.
+    const size_t distance = glyph >= start + span ? glyph - (start + span - 1) : start - glyph;
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearest = static_cast<int>(i);
+    }
+  }
+  return nearest;
 }
 
 void MangaWordLookupActivity::onExit() {
@@ -177,11 +215,35 @@ void MangaWordLookupActivity::performLookupImpl() {
   std::string text = buildLookupText(static_cast<size_t>(cursorIndex));
   if (text.empty()) return;
 
+  // A number is selected together with its counter (360度, ３人) -- the scan's selectable entry
+  // starts at the digits -- but the dictionary knows the counter, not "360度". Look up what
+  // follows the digits and show the digits as a prefix, as the book panel does. Without this every
+  // number-plus-counter word in manga answered "No match found".
+  std::string digitPrefix;
+  {
+    size_t b = 0;
+    while (b < text.size()) {
+      const auto c = static_cast<unsigned char>(text[b]);
+      if (c >= '0' && c <= '9') {
+        b += 1;
+      } else if (c == 0xEF && b + 2 < text.size() && static_cast<unsigned char>(text[b + 1]) == 0xBC &&
+                 static_cast<unsigned char>(text[b + 2]) >= 0x90 && static_cast<unsigned char>(text[b + 2]) <= 0x99) {
+        b += 3;  // fullwidth ０-９
+      } else {
+        break;
+      }
+    }
+    if (b > 0 && b < text.size()) {
+      digitPrefix = text.substr(0, b);
+      text = text.substr(b);
+    }
+  }
+
   WordLookupResult result;
   if (WordLookup::lookup(text, 0, result)) {
     WordSelectionScan::stripTrailingParticle(text, result);
     hasResult = true;
-    resultHeadword = result.entry.headword;
+    resultHeadword = digitPrefix + result.entry.headword;
     resultDefinition = std::move(result.entry.definition);
     DefinitionText::EntryMetadata metadata;
     DefinitionText::extractEntryMetadata(resultDefinition, resultHeadword, metadata);
@@ -530,17 +592,9 @@ void MangaWordLookupActivity::render(RenderLock&&) {
   DictionaryPanel::clearButtonHints(renderer);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  if (!initialRenderDone) {
-    renderer.displayBuffer();
-    initialRenderDone = true;
-    fastRefreshCount = 0;
-  } else {
-    fastRefreshCount++;
-    if (fastRefreshCount >= kFullRefreshInterval) {
-      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
-      fastRefreshCount = 0;
-    } else {
-      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-    }
-  }
+  // FAST only, the first render included. The framebuffer holds just the page's BW plane -- its
+  // grays exist only on the glass -- so a full or half refresh would repaint the whole manga page
+  // from that plane: a black flash, then the image in a different tone. A FAST wave drives only the
+  // pixels that change, the panel's, and leaves the page around it as it was.
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 }

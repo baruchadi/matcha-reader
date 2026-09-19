@@ -85,10 +85,26 @@ Binary format (panels.dat, per page at dataOffset):
         uint8   reserved
         uint16  translationLen    UTF-8 length of the panel's English translation
         bytes   translation[]     UTF-8 translation (translationLen bytes), empty if none
+        -- v3 and later --
+        uint16  cropX, cropY, cropW, cropH
+                                  the page region the panel's crop image shows (the panel
+                                  plus its margin), so a point on a zoomed panel can be
+                                  mapped back to page coordinates
         Per text block (textCount entries):
             uint16  x, y, w, h    text block bounding box (pixels)
             uint16  textLen       UTF-8 text length
             bytes   text[]        UTF-8 text (textLen bytes, not null-terminated)
+            -- v3 and later --
+            uint8   lineCount     printed lines (columns, for vertical text) in the block;
+                                  0 when the OCR gave no usable line geometry
+            uint8   flags         bit 0: vertical (lines are columns, read top to bottom)
+            Per line (lineCount entries), in reading order -- line i is the i-th
+            '\n'-separated segment of text[]:
+                uint16  x, y, w, h  the line's own bounding box (pixels)
+
+Line boxes let the device find the word under a finger: within a printed line, manga
+lettering advances one cell per character (an upright run such as "360" or "!!" sharing
+one cell), so a point along the line maps to a character of the block text.
 """
 
 from __future__ import annotations
@@ -108,7 +124,7 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-FORMAT_VERSION = 2  # v2 adds a per-panel translation string after the panel header
+FORMAT_VERSION = 3  # v2: per-panel translation string. v3: per-block line boxes + flags
 
 # Panel crops go in this subfolder of --output-dir. Must match MangaReaderActivity's
 # PANEL_CROP_SUBDIR; see the Output section above for why they are not loose in the book folder.
@@ -118,6 +134,10 @@ IDX_HEADER = "<II"  # version(4) + pageCount(4) = 8 bytes
 IDX_RECORD = "<IIHH"  # dataOffset(4) + dataLength(4) + imgWidth(2) + imgHeight(2) = 12 bytes
 PANEL_BOX = "<HHHHBBH"  # x(2)+y(2)+w(2)+h(2)+textCount(1)+pad(1)+translationLen(2) = 12 bytes
 TEXT_BLOCK = "<HHHHH"  # x(2) + y(2) + w(2) + h(2) + textLen(2) = 10 bytes
+LINE_HEADER = "<BB"  # lineCount(1) + flags(1)
+LINE_BOX = "<HHHH"  # x(2) + y(2) + w(2) + h(2) = 8 bytes
+LINE_FLAG_VERTICAL = 0x01
+CROP_BOX = "<HHHH"  # cropX(2) + cropY(2) + cropW(2) + cropH(2) = 8 bytes
 
 TOC_FORMAT_VERSION = 1
 TOC_HEADER = "<II"  # version(4) + entryCount(4) = 8 bytes
@@ -147,9 +167,16 @@ PANEL_OCR_PROMPT_TEMPLATE = """This image is a single panel cropped from {page_d
 List every piece of text/dialogue visible in this panel, in the order a
 reader would read them ({reading_order}). {translation_instruction}
 
+Also give every printed line inside each block separately -- for vertical text
+each column is one line -- with its own tight box around just that line's
+glyphs. Exclude furigana (small reading aids beside kanji) from text and boxes.
+
 Return ONLY a JSON object, no other text:
-{{"blocks": [{{"text": "<the {text_desc}, line breaks as \\n>",
-             "bbox_2d": [ymin, xmin, ymax, xmax]}}, ...],
+{{"blocks": [{{"text": "<the {text_desc}, its lines joined by \\n>",
+             "bbox_2d": [ymin, xmin, ymax, xmax],
+             "vertical": <true if the lines are vertical columns>,
+             "lines": [{{"text": "<one printed line>",
+                        "bbox_2d": [ymin, xmin, ymax, xmax]}}, ...]}}, ...],
  "translation": {translation_field}}}
 
 bbox_2d is each text region's bounding box normalized to a 0-1000 scale
@@ -1198,6 +1225,47 @@ def _call_gemini_panel_ocr_once(image_path: str, api_key: str, prompt: str, time
 # ── Binary output (same format the device already reads) ────────
 
 
+def block_lines_from_ocr(block: dict, origin_x: int, origin_y: int,
+                         panel_w: int, panel_h: int) -> tuple[str | None, list, bool]:
+    """Page-pixel line boxes for one OCR block, or none when they cannot be trusted.
+
+    Returns (text, lines, vertical). `text` is the block text rebuilt from its lines (so line i
+    is exactly the i-th '\n' segment, which is how the device finds a line's characters), or
+    None to keep the block's own text. Lines are kept only when every one has a box and a
+    non-empty text -- a partial set would shift every later line onto the wrong segment, which
+    is worse than none: the device then falls back to looking the whole block up.
+    """
+    raw = block.get("lines")
+    if not isinstance(raw, list) or not raw:
+        return None, [], False
+    lines = []
+    texts = []
+    for line in raw:
+        if not isinstance(line, dict):
+            return None, [], False
+        text = str(line.get("text", "")).strip()
+        box = line.get("bbox_2d")
+        if not text or "\n" in text or not (isinstance(box, list) and len(box) == 4):
+            return None, [], False
+        try:
+            ymin, xmin, ymax, xmax = (float(v) for v in box)
+        except (TypeError, ValueError):
+            return None, [], False
+        if ymax <= ymin or xmax <= xmin:
+            return None, [], False
+        lines.append([
+            origin_x + int(xmin / 1000 * panel_w), origin_y + int(ymin / 1000 * panel_h),
+            origin_x + int(xmax / 1000 * panel_w), origin_y + int(ymax / 1000 * panel_h),
+        ])
+        texts.append(text)
+    # Trust the model's flag when it gave one; otherwise the shape of the lines decides.
+    vertical = block.get("vertical")
+    if not isinstance(vertical, bool):
+        tall = sum(1 for x1, y1, x2, y2 in lines if (y2 - y1) > (x2 - x1))
+        vertical = tall * 2 >= len(lines)
+    return "\n".join(texts), lines[:255], vertical
+
+
 def encode_page(panels_with_text: list[dict]) -> bytes:
     """Encode one page's panel+text data to binary."""
     buf = bytearray()
@@ -1218,14 +1286,25 @@ def encode_page(panels_with_text: list[dict]) -> bytes:
             PANEL_BOX, max(0, x1), max(0, y1), max(0, w), max(0, h), text_count, 0, len(translation_bytes)
         )
         buf += translation_bytes
+        cx1, cy1, cx2, cy2 = panel.get("crop", panel["box"])
+        buf += struct.pack(CROP_BOX, max(0, cx1), max(0, cy1), max(0, cx2 - cx1), max(0, cy2 - cy1))
 
         for tb in text_blocks[:text_count]:
-            tx, ty, tw, th = tb["box"]
+            # Blocks carry corners (x1, y1, x2, y2); the format stores x, y, w, h. Before v3 the
+            # corners were written straight into the w/h fields -- harmless while nothing on the
+            # device read block boxes, but v3's line hit test does, so write the size.
+            tx, ty, tx2, ty2 = tb["box"]
+            tw, th = tx2 - tx, ty2 - ty
             text_bytes = tb["text"].encode("utf-8")
             if len(text_bytes) > 0xFFFF:
                 text_bytes = text_bytes[:0xFFFF]
             buf += struct.pack(TEXT_BLOCK, max(0, tx), max(0, ty), max(0, tw), max(0, th), len(text_bytes))
             buf += text_bytes
+            lines = tb.get("lines", [])[:255]
+            flags = LINE_FLAG_VERTICAL if tb.get("vertical") else 0
+            buf += struct.pack(LINE_HEADER, len(lines), flags)
+            for lx1, ly1, lx2, ly2 in lines:
+                buf += struct.pack(LINE_BOX, max(0, lx1), max(0, ly1), max(0, lx2 - lx1), max(0, ly2 - ly1))
 
     return bytes(buf)
 
@@ -1874,6 +1953,7 @@ def main():
             # ~N x call_latency into ~call_latency per page.
             panel_paths = []
             panel_rects = []
+            ocr_temp_paths = []
             for panel_idx, box in enumerate(boxes):
                 x1, y1, x2, y2 = box
                 mx1 = max(0, x1 - args.panel_margin)
@@ -1904,16 +1984,34 @@ def main():
                     else:
                         panel_path = os.path.join(panel_dir, f"p{page_idx}_{panel_idx}.jpg")
                         cropped.convert("RGB").save(panel_path, "JPEG", quality=90)
-                panel_paths.append(panel_path)
+                ocr_path = panel_path
+                if ocr_path is None and api_key:
+                    # A full-page panel has no crop, but its text still needs reading: a splash page,
+                    # or every page when detection finds no borders (the grid fallback without YOLO),
+                    # used to come through with no text and so no word lookup at all. OCR the same
+                    # margin rect a crop would have covered, from a temp file that is not kept.
+                    ocr_img = fit_to_device(source_img.crop((
+                        max(0, round(mx1 * panel_scale_x)),
+                        max(0, round(my1 * panel_scale_y)),
+                        min(source_img.width, round(mx2 * panel_scale_x)),
+                        min(source_img.height, round(my2 * panel_scale_y)),
+                    )), device_target)
+                    fd, ocr_path = tempfile.mkstemp(suffix=".jpg")
+                    os.close(fd)
+                    ocr_img.convert("RGB").save(ocr_path, "JPEG", quality=90)
+                    ocr_temp_paths.append(ocr_path)
+                panel_paths.append(ocr_path)
                 panel_rects.append((mx1, my1, mx2, my2))
 
             if api_key:
-                # Only call Gemini for panels that have a crop file;
-                # full-page panels (no crop) get an empty result directly.
+                # Every panel is read: cropped panels from their crop, full-page panels from the
+                # temp copy made above.
                 def _ocr_or_empty(p):
                     return call_gemini_panel_ocr(p, api_key, ocr_prompt) if p else {"blocks": [], "translation": ""}
                 with ThreadPoolExecutor(max_workers=min(8, max(1, len(panel_paths)))) as pool:
                     ocr_results = list(pool.map(_ocr_or_empty, panel_paths))
+                for temp_path in ocr_temp_paths:
+                    os.unlink(temp_path)
             else:
                 ocr_results = [{"blocks": [], "translation": ""} for _ in panel_paths]
 
@@ -1933,15 +2031,21 @@ def main():
                     bbox = b.get("bbox_2d")
                     if bbox and len(bbox) == 4:
                         ymin, xmin, ymax, xmax = bbox
-                        tx1 = x1 + int(xmin / 1000 * panel_w)
-                        ty1 = y1 + int(ymin / 1000 * panel_h)
-                        tx2 = x1 + int(xmax / 1000 * panel_w)
-                        ty2 = y1 + int(ymax / 1000 * panel_h)
+                        # Relative to the margin crop Gemini was shown (mx1, my1), not the panel
+                        # frame: offsetting from the frame shifted every box by the margin, a third
+                        # of a character on the page -- enough to land a tap on the wrong one.
+                        tx1 = mx1 + int(xmin / 1000 * panel_w)
+                        ty1 = my1 + int(ymin / 1000 * panel_h)
+                        tx2 = mx1 + int(xmax / 1000 * panel_w)
+                        ty2 = my1 + int(ymax / 1000 * panel_h)
                     else:
                         tx1, ty1, tx2, ty2 = x1, y1, x2, y2
-                    text_blocks.append({"box": [tx1, ty1, tx2, ty2], "text": text})
+                    line_text, lines, vertical = block_lines_from_ocr(b, mx1, my1, panel_w, panel_h)
+                    text_blocks.append({"box": [tx1, ty1, tx2, ty2], "text": line_text or text,
+                                        "lines": lines, "vertical": vertical})
 
-                panels_with_text.append({"box": box, "text_blocks": text_blocks, "translation": translation})
+                panels_with_text.append({"box": box, "text_blocks": text_blocks, "translation": translation,
+                                         "crop": [mx1, my1, mx2, my2]})
                 total_panels += 1
                 total_text_blocks += len(text_blocks)
 
