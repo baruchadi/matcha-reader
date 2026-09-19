@@ -148,6 +148,8 @@ Japanese is the exception: it always uses the converted files in `dictionaries/j
 
 The dictionary you pick in Settings becomes the fallback, used when the book has no language or no folder matches it. Reader Settings shows which dictionary a book actually ended up with.
 
+The folder can also be called `.dictionaries/`, which hides it from the file browser. It works exactly the same, including `jp/`.
+
 Convert with the [browser tool](https://eszter007.github.io/matcha-reader-tools/), or the script:
 
 ```bash
@@ -160,7 +162,7 @@ python3 tools/dict_convert/convert_jmdict.py \
 
 Some folder names pair a font with an entry that is already in the list instead of adding one of their own: `NotoSansJP` / `NotoSerifJP` become the Japanese half of **Noto Sans** / **Noto Serif**, and a `…Extended` name widens the font it is named after. A paired font's sizes are offered on the entry it pairs with, so a book that font carries can be read at any size you install — put `NotoSansJP_20.cpfont` on the card and 20 pt appears under Noto Sans. A book it does not carry (an English one, for a Japanese font) renders at the nearest size the main font ships instead.
 
-**4. Set up translation** (optional). Get a key from [Google AI Studio](https://aistudio.google.com/apikey) and save it as `/system/gemini.key` on the card.
+**4. Set up translation** (optional). Get a key from [Google AI Studio](https://aistudio.google.com/apikey) and save it as `/system/gemini.key` on the card. A hidden `/.system/` folder works too.
 
 Using all of it: [§6 of the User Guide](USER_GUIDE.md#6-japanese-reading-features).
 
