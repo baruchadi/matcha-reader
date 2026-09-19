@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstring>
 #include <ctime>
+#include <iterator>
 #include <utility>
 
 #include "CrossPointSettings.h"
@@ -1668,12 +1669,14 @@ std::vector<const manga::TextBlock*> MangaReaderActivity::viewTextBlocks() const
   // panel's on a full page. launchWordLookupCurrentView() and the hold's hit test both go through
   // here, so the character a hold resolves to indexes the same text the lookup scans.
   std::vector<const manga::TextBlock*> blocks;
+  const auto addBlocks = [&blocks](const manga::Panel& panel) {
+    std::transform(panel.textBlocks.begin(), panel.textBlocks.end(), std::back_inserter(blocks),
+                   [](const manga::TextBlock& tb) { return &tb; });
+  };
   if (currentPanel >= 0 && currentPanel < static_cast<int>(panels.size())) {
-    for (const auto& tb : panels[currentPanel].textBlocks) blocks.push_back(&tb);
+    addBlocks(panels[currentPanel]);
   } else {
-    for (const auto& panel : panels) {
-      for (const auto& tb : panel.textBlocks) blocks.push_back(&tb);
-    }
+    std::for_each(panels.begin(), panels.end(), addBlocks);
   }
   return blocks;
 }
@@ -1760,7 +1763,8 @@ bool MangaReaderActivity::holdTarget(const int x, const int y, std::string& text
   // lookup's scan, so they are not counted.
   int base = 0;
   for (int b = 0; b < bestBlock; b++) {
-    for (const uint32_t cp : decodeUtf8(blocks[b]->text)) base += (cp != '\n');
+    const auto cps = decodeUtf8(blocks[b]->text);
+    base += static_cast<int>(std::count_if(cps.begin(), cps.end(), [](const uint32_t cp) { return cp != '\n'; }));
   }
   const auto cps = decodeUtf8(block.text);
   std::vector<uint32_t> line;
