@@ -138,16 +138,13 @@ DictFileHandles g_vocabHandles;
 DictFileHandles g_grammarHandles;
 DictFileHandles g_namesHandles;
 
+// Classified by filename, not full path: the folder is resolved at runtime (/dictionaries/jp,
+// /.dictionaries/jp or /dict), so only the leaf is fixed.
 DictFileHandles& handlesFor(const char* idxPath) {
-  if (std::strcmp(idxPath, DictIndex::GRAMMAR_IDX_PATH) == 0 ||
-      std::strcmp(idxPath, DictIndex::OLD_GRAMMAR_IDX_PATH) == 0)
-    return g_grammarHandles;
-  if (std::strcmp(idxPath, DictIndex::NAMES_IDX_PATH) == 0 ||
-      std::strcmp(idxPath, DictIndex::JP_LEGACY_NAMES_IDX_PATH) == 0 ||
-      std::strcmp(idxPath, DictIndex::OLD_NAMES_IDX_PATH) == 0 ||
-      std::strcmp(idxPath, DictIndex::LEGACY_NAMES_IDX_PATH) == 0) {
-    return g_namesHandles;
-  }
+  const char* slash = std::strrchr(idxPath, '/');
+  const char* leaf = slash ? slash + 1 : idxPath;
+  if (std::strcmp(leaf, "grammar.idx") == 0) return g_grammarHandles;
+  if (std::strcmp(leaf, "names.idx") == 0 || std::strcmp(leaf, "jmnedict.idx") == 0) return g_namesHandles;
   return g_vocabHandles;
 }
 
@@ -157,6 +154,20 @@ DictFileHandles& handlesFor(const char* idxPath) {
 const char* g_vocabIdxResolved = nullptr;
 const char* g_namesIdxResolved = nullptr;
 const char* g_grammarIdxResolved = nullptr;
+// The .dat paired with each resolved .idx. Same folder and stem, so derived from it rather than
+// from a constant: the folder may be /.dictionaries/jp, which no constant spells.
+std::string g_vocabDat;
+std::string g_namesDat;
+std::string g_grammarDat;
+
+const char* datFor(const char* idxPath, std::string& cache) {
+  if (cache.empty()) {
+    cache = idxPath;
+    const size_t len = cache.size();
+    if (len > 4 && cache.compare(len - 4, 4, ".idx") == 0) cache.replace(len - 4, 4, ".dat");
+  }
+  return cache.c_str();
+}
 
 // The folder the Japanese dictionary lives in. Two spellings are accepted, the same way the font
 // registry accepts /.fonts beside /fonts: the dotted one keeps the folder out of the file browser
@@ -462,32 +473,17 @@ const char* DictIndex::vocabIdxPath() {
   return resolveIdxPath(g_vocabIdxResolved, VOCAB_IDX_PATH, JP_LEGACY_VOCAB_IDX_PATH, OLD_VOCAB_IDX_PATH,
                         LEGACY_VOCAB_IDX_PATH);
 }
-const char* DictIndex::vocabDatPath() {
-  // Pair the .dat with whichever .idx was resolved -- never mix legacy and preferred halves.
-  const char* path = vocabIdxPath();
-  return std::strcmp(path, JP_LEGACY_VOCAB_IDX_PATH) == 0 ? JP_LEGACY_VOCAB_DAT_PATH
-         : std::strcmp(path, LEGACY_VOCAB_IDX_PATH) == 0  ? LEGACY_VOCAB_DAT_PATH
-         : std::strcmp(path, OLD_VOCAB_IDX_PATH) == 0     ? OLD_VOCAB_DAT_PATH
-                                                          : VOCAB_DAT_PATH;
-}
+// Each .dat pairs with whichever .idx was resolved -- never mix legacy and preferred halves.
+const char* DictIndex::vocabDatPath() { return datFor(vocabIdxPath(), g_vocabDat); }
 const char* DictIndex::namesIdxPath() {
   return resolveIdxPath(g_namesIdxResolved, NAMES_IDX_PATH, JP_LEGACY_NAMES_IDX_PATH, OLD_NAMES_IDX_PATH,
                         LEGACY_NAMES_IDX_PATH);
 }
-const char* DictIndex::namesDatPath() {
-  const char* path = namesIdxPath();
-  return std::strcmp(path, JP_LEGACY_NAMES_IDX_PATH) == 0 ? JP_LEGACY_NAMES_DAT_PATH
-         : std::strcmp(path, LEGACY_NAMES_IDX_PATH) == 0  ? LEGACY_NAMES_DAT_PATH
-         : std::strcmp(path, OLD_NAMES_IDX_PATH) == 0     ? OLD_NAMES_DAT_PATH
-                                                          : NAMES_DAT_PATH;
-}
+const char* DictIndex::namesDatPath() { return datFor(namesIdxPath(), g_namesDat); }
 const char* DictIndex::grammarIdxPath() {
   return resolveIdxPath(g_grammarIdxResolved, GRAMMAR_IDX_PATH, nullptr, OLD_GRAMMAR_IDX_PATH, nullptr);
 }
-const char* DictIndex::grammarDatPath() {
-  const char* path = grammarIdxPath();
-  return std::strcmp(path, OLD_GRAMMAR_IDX_PATH) == 0 ? OLD_GRAMMAR_DAT_PATH : GRAMMAR_DAT_PATH;
-}
+const char* DictIndex::grammarDatPath() { return datFor(grammarIdxPath(), g_grammarDat); }
 
 bool DictIndex::isAvailable() { return Storage.exists(vocabIdxPath()) && Storage.exists(vocabDatPath()); }
 
@@ -811,6 +807,9 @@ void DictIndex::releaseCaches() {
   g_vocabIdxResolved = nullptr;
   g_namesIdxResolved = nullptr;
   g_grammarIdxResolved = nullptr;
+  g_vocabDat.clear();
+  g_namesDat.clear();
+  g_grammarDat.clear();
 }
 
 void DictIndex::logAndResetStats(const char* label) {
