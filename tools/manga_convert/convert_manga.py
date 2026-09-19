@@ -85,6 +85,11 @@ Binary format (panels.dat, per page at dataOffset):
         uint8   reserved
         uint16  translationLen    UTF-8 length of the panel's English translation
         bytes   translation[]     UTF-8 translation (translationLen bytes), empty if none
+        -- v3 and later --
+        uint16  cropX, cropY, cropW, cropH
+                                  the page region the panel's crop image shows (the panel
+                                  plus its margin), so a point on a zoomed panel can be
+                                  mapped back to page coordinates
         Per text block (textCount entries):
             uint16  x, y, w, h    text block bounding box (pixels)
             uint16  textLen       UTF-8 text length
@@ -132,6 +137,7 @@ TEXT_BLOCK = "<HHHHH"  # x(2) + y(2) + w(2) + h(2) + textLen(2) = 10 bytes
 LINE_HEADER = "<BB"  # lineCount(1) + flags(1)
 LINE_BOX = "<HHHH"  # x(2) + y(2) + w(2) + h(2) = 8 bytes
 LINE_FLAG_VERTICAL = 0x01
+CROP_BOX = "<HHHH"  # cropX(2) + cropY(2) + cropW(2) + cropH(2) = 8 bytes
 
 TOC_FORMAT_VERSION = 1
 TOC_HEADER = "<II"  # version(4) + entryCount(4) = 8 bytes
@@ -1280,6 +1286,8 @@ def encode_page(panels_with_text: list[dict]) -> bytes:
             PANEL_BOX, max(0, x1), max(0, y1), max(0, w), max(0, h), text_count, 0, len(translation_bytes)
         )
         buf += translation_bytes
+        cx1, cy1, cx2, cy2 = panel.get("crop", panel["box"])
+        buf += struct.pack(CROP_BOX, max(0, cx1), max(0, cy1), max(0, cx2 - cx1), max(0, cy2 - cy1))
 
         for tb in text_blocks[:text_count]:
             # Blocks carry corners (x1, y1, x2, y2); the format stores x, y, w, h. Before v3 the
@@ -2036,7 +2044,8 @@ def main():
                     text_blocks.append({"box": [tx1, ty1, tx2, ty2], "text": line_text or text,
                                         "lines": lines, "vertical": vertical})
 
-                panels_with_text.append({"box": box, "text_blocks": text_blocks, "translation": translation})
+                panels_with_text.append({"box": box, "text_blocks": text_blocks, "translation": translation,
+                                         "crop": [mx1, my1, mx2, my2]})
                 total_panels += 1
                 total_text_blocks += len(text_blocks)
 

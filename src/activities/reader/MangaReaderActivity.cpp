@@ -13,6 +13,7 @@
 #include <Memory.h>
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <cstring>
 #include <ctime>
@@ -494,6 +495,7 @@ bool MangaReaderActivity::handleEndOfBookPageTurn(const bool prevTriggered, cons
 bool MangaReaderActivity::renderEndOfBook() {
   if (!isAtEndOfBook()) return false;
   displayedRotated_ = false;  // this screen is drawn in the base orientation, whatever preceded it
+  displayedMap_.valid = false;
   if (!endOfBookOptions) {
     endOfBookOptions = makeUniqueNoThrow<EndOfBookOptions>(renderer);
     if (!endOfBookOptions) LOG_ERR("MRA", "OOM: EndOfBookOptions");
@@ -555,6 +557,8 @@ void MangaReaderActivity::loop() {
   // is what it did before.
   ReaderUtils::TouchPageTurn touch{};
   bool touchMenu = false;
+  std::string holdText;
+  int holdGlyph = -1;
   {
     RenderLock touchLock{RenderLock::Try{}};
     const bool rotateTouch = touchLock.held() && displayedRotated_;
@@ -565,11 +569,25 @@ void MangaReaderActivity::loop() {
       baseOrientation = renderer.getOrientation();
       renderer.setOrientation(static_cast<GfxRenderer::Orientation>((baseOrientation + 3) % 4));
     }
+    // A hold on a speech bubble looks up the word under the finger. Read in the drawn frame like
+    // the zones, and first: a hold never also reads as the tap those handle. Only under the lock,
+    // since displayedMap_ is the render task's -- a miss simply leaves the hold for the next tick.
+    int holdX = 0;
+    int holdY = 0;
+    if (touchLock.held() && mappedInput.hasTouch() && DictIndex::isAvailable() &&
+        mappedInput.wasScreenLongPress(holdX, holdY) && !holdTarget(holdX, holdY, holdText, holdGlyph)) {
+      holdGlyph = -1;
+    }
     touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
     touchMenu = ReaderUtils::isTouchMenuGesture(renderer, mappedInput);
     if (rotateTouch) {
       renderer.setOrientation(baseOrientation);
     }
+  }
+
+  if (holdGlyph >= 0) {
+    launchWordLookupAt(std::move(holdText), holdGlyph);
+    return;
   }
 
   if (showBookmarkMessage && (millis() - bookmarkMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
@@ -858,6 +876,7 @@ void MangaReaderActivity::renderFullPage() {
   // from the last rotated page would have touch resolving rotated over an unrotated screen. The
   // geometry sets the real value further down.
   displayedRotated_ = false;
+  displayedMap_.valid = false;
 
   std::string imgPath = book->getPageImagePath(currentPage);
   if (imgPath.empty()) {
@@ -910,6 +929,16 @@ void MangaReaderActivity::renderFullPage() {
   const auto savedOrientation = static_cast<GfxRenderer::Orientation>(g.savedOrientation);
   const bool rotatePage = g.rotated;
   displayedRotated_ = rotatePage;
+  displayedMap_ = HoldMap{true,
+                          g.x,
+                          g.y,
+                          g.destWidth,
+                          g.destHeight,
+                          0,
+                          0,
+                          book ? book->getPageImgWidth(currentPage) : 0,
+                          book ? book->getPageImgHeight(currentPage) : 0};
+  displayedMap_.valid = displayedMap_.sw > 0 && displayedMap_.sh > 0;
   const int x = g.x, y = g.y;
   const int destWidth = g.destWidth, destHeight = g.destHeight;
   const int screenW = g.screenW, screenH = g.screenH;
@@ -1040,6 +1069,7 @@ void MangaReaderActivity::prefetchNextPageCache() {
 
 void MangaReaderActivity::renderPanelZoom() {
   displayedRotated_ = false;  // see renderFullPage(): every early return below falls back to it
+  displayedMap_.valid = false;
   // Deferred-grayscale phase (see the panelGray* flags in the header). true means the BW image is
   // already displayed on the e-ink from the initial entry, so this pass skips the BW refresh wave
   // and only adds the 4-level gray wave; false is a fresh entry that shows BW and re-defers the gray
@@ -1096,6 +1126,10 @@ void MangaReaderActivity::renderPanelZoom() {
   const PanelGeom g = applyPanelGeometry(panelDims[currentPanel].w, panelDims[currentPanel].h);
   const bool rotatePanel = g.rotated;
   displayedRotated_ = rotatePanel;
+  {
+    const auto& p = panels[currentPanel];
+    displayedMap_ = HoldMap{p.cropW > 0 && p.cropH > 0, g.x, g.y, g.fitW, g.fitH, p.cropX, p.cropY, p.cropW, p.cropH};
+  }
   const auto savedOrientation = static_cast<GfxRenderer::Orientation>(g.savedOrientation);
   const int screenW = renderer.getScreenWidth();
   const int screenH = renderer.getScreenHeight();
@@ -1517,6 +1551,7 @@ void MangaReaderActivity::workerWarmPanel() {
 void MangaReaderActivity::renderTextOverlay() {
   renderer.clearScreen();
   displayedRotated_ = false;  // see renderFullPage(): text is laid out in the base orientation
+  displayedMap_.valid = false;
 
   if (currentPanel < 0 || currentPanel >= static_cast<int>(panels.size())) {
     viewMode = ViewMode::PanelZoom;
@@ -1608,21 +1643,151 @@ void MangaReaderActivity::launchWordLookupCurrentView() {
   // combine every panel's text on the page so lookup still works
   // without having to zoom into each panel individually.
   if (!book || !DictIndex::isAvailable()) return;
-  const ViewMode returnMode = viewMode;
   std::string combined;
+  for (const auto* tb : viewTextBlocks()) {
+    if (!combined.empty()) combined += '\n';
+    combined += tb->text;
+  }
+  launchWordLookupAt(std::move(combined), -1);
+}
+
+std::vector<const manga::TextBlock*> MangaReaderActivity::viewTextBlocks() const {
+  // The text a lookup from this view covers, in reading order: the zoomed panel's, or every
+  // panel's on a full page. launchWordLookupCurrentView() and the hold's hit test both go through
+  // here, so the character a hold resolves to indexes the same text the lookup scans.
+  std::vector<const manga::TextBlock*> blocks;
   if (currentPanel >= 0 && currentPanel < static_cast<int>(panels.size())) {
-    for (const auto& tb : panels[currentPanel].textBlocks) {
-      if (!combined.empty()) combined += '\n';
-      combined += tb.text;
-    }
+    for (const auto& tb : panels[currentPanel].textBlocks) blocks.push_back(&tb);
   } else {
     for (const auto& panel : panels) {
-      for (const auto& tb : panel.textBlocks) {
-        if (!combined.empty()) combined += '\n';
-        combined += tb.text;
+      for (const auto& tb : panel.textBlocks) blocks.push_back(&tb);
+    }
+  }
+  return blocks;
+}
+
+namespace {
+// Codepoints of a UTF-8 string, line breaks included.
+std::vector<uint32_t> decodeUtf8(const std::string& s) {
+  std::vector<uint32_t> out;
+  out.reserve(s.size() / 2);
+  for (size_t b = 0; b < s.size();) {
+    const auto c0 = static_cast<unsigned char>(s[b]);
+    size_t len = c0 < 0x80 ? 1 : (c0 & 0xE0) == 0xC0 ? 2 : (c0 & 0xF0) == 0xE0 ? 3 : 4;
+    if (b + len > s.size()) break;
+    uint32_t cp = len == 1 ? c0 : len == 2 ? (c0 & 0x1F) : len == 3 ? (c0 & 0x0F) : (c0 & 0x07);
+    for (size_t k = 1; k < len; k++) cp = (cp << 6) | (static_cast<unsigned char>(s[b + k]) & 0x3F);
+    out.push_back(cp);
+    b += len;
+  }
+  return out;
+}
+
+bool isUprightAlnum(const uint32_t cp) {
+  return (cp >= '0' && cp <= '9') || (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z');
+}
+bool isBang(const uint32_t cp) { return cp == '!' || cp == '?' || cp == 0xFF01 || cp == 0xFF1F; }
+
+// Start offsets (within `line`) of the cells manga lettering puts the line in: one per character,
+// except that a short run of Latin letters/digits ("360") or a doubled !/? ("!!", "!?") is set
+// upright in a single cell. Counting those as several cells would push every later character of
+// the line one or more cells off.
+std::vector<size_t> lineCells(const std::vector<uint32_t>& line) {
+  std::vector<size_t> cells;
+  for (size_t i = 0; i < line.size();) {
+    cells.push_back(i);
+    if (isUprightAlnum(line[i])) {
+      size_t j = i;
+      while (j < line.size() && j - i < 4 && isUprightAlnum(line[j])) j++;
+      i = j;
+    } else if (isBang(line[i]) && i + 1 < line.size() && isBang(line[i + 1])) {
+      i += 2;
+    } else {
+      i++;
+    }
+  }
+  return cells;
+}
+}  // namespace
+
+bool MangaReaderActivity::holdTarget(const int x, const int y, std::string& text, int& glyph) const {
+  const HoldMap& m = displayedMap_;
+  if (!m.valid || m.dw <= 0 || m.dh <= 0) return false;
+  if (x < m.dx || y < m.dy || x >= m.dx + m.dw || y >= m.dy + m.dh) return false;
+  // Onto the page image the text boxes are measured in.
+  const int px = m.sx + static_cast<int>(static_cast<int64_t>(x - m.dx) * m.sw / m.dw);
+  const int py = m.sy + static_cast<int>(static_cast<int64_t>(y - m.dy) * m.sh / m.dh);
+
+  const auto blocks = viewTextBlocks();
+  int bestBlock = -1;
+  int bestLine = -1;
+  int bestDistance = INT_MAX;
+  for (size_t b = 0; b < blocks.size(); b++) {
+    const auto& lines = blocks[b]->lines;
+    for (size_t l = 0; l < lines.size(); l++) {
+      const auto& lb = lines[l];
+      const int dx = px < lb.x ? lb.x - px : (px >= lb.x + lb.w ? px - (lb.x + lb.w - 1) : 0);
+      const int dy = py < lb.y ? lb.y - py : (py >= lb.y + lb.h ? py - (lb.y + lb.h - 1) : 0);
+      const int distance = std::max(dx, dy);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestBlock = static_cast<int>(b);
+        bestLine = static_cast<int>(l);
       }
     }
   }
+  if (bestBlock < 0) return false;
+  const auto& block = *blocks[bestBlock];
+  const auto& lb = block.lines[bestLine];
+  // Within about a character of a line the intent is unambiguous; further out (the artwork, an
+  // empty corner of the bubble) is not a word at all.
+  const int cellSize = block.vertical ? lb.w : lb.h;
+  if (bestDistance > std::max(8, cellSize)) return false;
+
+  // Text of the whole view, and where this line starts in it. Line breaks are not glyphs to the
+  // lookup's scan, so they are not counted.
+  int base = 0;
+  for (int b = 0; b < bestBlock; b++) {
+    for (const uint32_t cp : decodeUtf8(blocks[b]->text)) base += (cp != '\n');
+  }
+  const auto cps = decodeUtf8(block.text);
+  std::vector<uint32_t> line;
+  int lineIndex = 0;
+  for (const uint32_t cp : cps) {
+    if (cp == '\n') {
+      if (lineIndex == bestLine) break;
+      lineIndex++;
+      continue;
+    }
+    if (lineIndex == bestLine) {
+      line.push_back(cp);
+    } else {
+      base++;
+    }
+  }
+  if (line.empty()) return false;
+
+  // The cell under the point: the line's length split evenly into its cells. Clamped, so a hold
+  // just past either end lands on the first or last character.
+  const auto cells = lineCells(line);
+  const int along = block.vertical ? py - lb.y : px - lb.x;
+  const int length = std::max(1, block.vertical ? static_cast<int>(lb.h) : static_cast<int>(lb.w));
+  const int cell =
+      std::clamp(static_cast<int>(static_cast<int64_t>(along) * static_cast<int64_t>(cells.size()) / length), 0,
+                 static_cast<int>(cells.size()) - 1);
+
+  text.clear();
+  for (const auto* tb : blocks) {
+    if (!text.empty()) text += '\n';
+    text += tb->text;
+  }
+  glyph = base + static_cast<int>(cells[cell]);
+  return true;
+}
+
+void MangaReaderActivity::launchWordLookupAt(std::string combined, const int glyph) {
+  if (!book || !DictIndex::isAvailable()) return;
+  const ViewMode returnMode = viewMode;
   if (combined.empty()) return;
   // Dictionary text needs the Japanese SD fallback. Restore it only for the child activity, then
   // return its memory to the page decoder before the manga redraws.
@@ -1633,7 +1798,7 @@ void MangaReaderActivity::launchWordLookupCurrentView() {
   }
   startActivityForResult(std::make_unique<MangaWordLookupActivity>(
                              renderer, mappedInput, std::move(combined), book->getCachePath() + "/wlscan.bin",
-                             static_cast<uint16_t>(currentPage), static_cast<uint16_t>(currentPanel + 1)),
+                             static_cast<uint16_t>(currentPage), static_cast<uint16_t>(currentPanel + 1), glyph),
                          [this, returnMode](const ActivityResult&) {
                            {
                              RenderLock lock;

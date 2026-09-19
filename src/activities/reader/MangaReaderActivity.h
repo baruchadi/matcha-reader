@@ -97,6 +97,22 @@ class MangaReaderActivity final : public Activity {
   // were being split along the reading orientation's axis rather than the one
   // the page is actually displayed on.
   bool displayedRotated_ = false;
+  // Where the page (or zoomed panel) was drawn, in the frame it was drawn in, and which region of
+  // the page image that is -- so a hold can be mapped back onto the page's text lines. Written by
+  // the render task alongside displayedRotated_ and read under the same lock. valid is false for
+  // views with no page image behind them (text overlay, end of book), and for a zoomed panel
+  // whose crop region is unknown (volumes converted before panels.dat v3).
+  struct HoldMap {
+    bool valid = false;
+    int dx = 0, dy = 0, dw = 0, dh = 0;  // drawn rect
+    int sx = 0, sy = 0, sw = 0, sh = 0;  // page-image region it shows
+  };
+  HoldMap displayedMap_;
+  // A hold at (x, y) in the drawn frame: the text under it, as the view's combined lookup text
+  // plus the character index inside it. False when no line is near enough to mean anything.
+  bool holdTarget(int x, int y, std::string& text, int& glyph) const;
+  void launchWordLookupAt(std::string text, int glyph);
+  std::vector<const manga::TextBlock*> viewTextBlocks() const;
 
   FullPageGeom applyFullPageGeometry(int imgWidth, int imgHeight);
   // Pure fit/rotate math shared by applyFullPageGeometry (render path) and the prefetch worker.

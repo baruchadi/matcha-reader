@@ -11,6 +11,7 @@
 #include <WordLookup.h>
 
 #include <algorithm>
+#include <cstdint>
 
 #include "CrossPointSettings.h"
 #include "DefinitionTextRenderer.h"
@@ -22,8 +23,10 @@
 
 MangaWordLookupActivity::MangaWordLookupActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                  const std::string& panelText, std::string scanCachePath,
-                                                 const uint16_t pageIndex, const uint16_t panelIndex)
+                                                 const uint16_t pageIndex, const uint16_t panelIndex,
+                                                 const int targetGlyph)
     : Activity("MangaWordLookup", renderer, mappedInput),
+      targetGlyph(targetGlyph),
       scanCachePath(std::move(scanCachePath)),
       scanPage(pageIndex),
       scanPanel(panelIndex) {
@@ -69,6 +72,17 @@ void MangaWordLookupActivity::onEnter() {
   Activity::onEnter();
   // Heap telemetry for the word-lookup OOM crash hunt -- see EpubReaderWordLookupActivity.
   LOG_INF("MWLA", "onEnter heap: free=%u maxAlloc=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+  // A hold on the page names its own character, which beats both the remembered position and the
+  // first match: the reader pointed at something.
+  if (targetGlyph >= 0) {
+    const int hit = selectableForGlyph(static_cast<size_t>(targetGlyph));
+    if (hit >= 0) {
+      cursorIndex = hit;
+      performLookup();
+      requestUpdate();
+      return;
+    }
+  }
   // A scan-cache hit remembers the last cursor position for this exact panel/page text -- see
   // EpubReaderWordLookupActivity::onEnter().
   if (scan.restoredCursorIndex != WordSelectionScan::kNoRestoredCursor &&
@@ -85,6 +99,30 @@ void MangaWordLookupActivity::onEnter() {
   }
   if (cursorIndex > maxIdx) cursorIndex = 0;
   requestUpdate();
+}
+
+int MangaWordLookupActivity::selectableForGlyph(const size_t glyph) {
+  // Segmentation is sequential, so the word covering `glyph` is known once the scan has mapped a
+  // word starting past it (or finished). A view's text is a few bubbles, so this is short --
+  // moveCursor() scans ahead synchronously the same way.
+  auto mappedPast = [&] { return !scan.selectToAllIdx.empty() && scan.selectToAllIdx.back() > glyph; };
+  while (!scan.isDone() && !mappedPast()) scan.step(50);
+
+  int nearest = -1;
+  size_t nearestDistance = SIZE_MAX;
+  for (size_t i = 0; i < scan.selectToAllIdx.size(); i++) {
+    const size_t start = scan.selectToAllIdx[i];
+    const size_t span = std::max<size_t>(scan.selectableGlyphs[i].matchLen, 1);
+    if (glyph >= start && glyph < start + span) return static_cast<int>(i);
+    // A character no word covers (punctuation, a particle the dictionary skipped): the closest
+    // word by position, preferring the one it ends -- the same snap the book panel makes.
+    const size_t distance = glyph >= start + span ? glyph - (start + span - 1) : start - glyph;
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearest = static_cast<int>(i);
+    }
+  }
+  return nearest;
 }
 
 void MangaWordLookupActivity::onExit() {
