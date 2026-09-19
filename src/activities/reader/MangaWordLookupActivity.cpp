@@ -1,7 +1,6 @@
 #include "MangaWordLookupActivity.h"
 
 #include <Arduino.h>
-#include <algorithm>
 #include <DictIndex.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
@@ -10,6 +9,8 @@
 #include <Logging.h>
 #include <SdCardFontSystem.h>
 #include <WordLookup.h>
+
+#include <algorithm>
 
 #include "CrossPointSettings.h"
 #include "DefinitionTextRenderer.h"
