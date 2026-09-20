@@ -155,6 +155,13 @@ enum UIIcon {
   Blocks
 };
 
+enum class RootExperience : uint8_t { LEGACY_HOME = 0, READING_HUB = 1 };
+
+struct ReadingHubRow {
+  const char* title;
+  const char* subtitle;
+};
+
 // Default theme implementation (Classic Theme)
 // Additional themes can inherit from this and override methods as needed
 
@@ -236,6 +243,11 @@ constexpr ThemeMetrics values = {.batteryWidth = 15,
 class BaseTheme {
  public:
   virtual ~BaseTheme() = default;
+
+  // A theme can replace the root experience while keeping the common component
+  // contract for settings, dialogs, the library, and the reader.
+  virtual RootExperience rootExperience() const { return RootExperience::LEGACY_HOME; }
+  virtual void drawReadingHubRows(const GfxRenderer&, Rect, const ReadingHubRow*, int, int) const {}
 
   // Component drawing methods
   static void drawProgressBar(const GfxRenderer& renderer, Rect rect, size_t current, size_t total);

@@ -91,6 +91,13 @@ CrossPoint's own library screen is still here if you prefer it: an indexed list 
 thousands of books, sorted by title, author or when they were added. **Settings → Display → Library** gathers the library
 settings on one screen, starting with the view switch: **Matcha Covers** (the default) or **CrossPoint List**.
 
+### Reading Hub theme
+
+**Settings → Display → UI Theme → Reading Hub** replaces the traditional home menu with four root sections:
+**Now**, **Library**, **Queue**, and **Read**. On button devices, the side keys switch sections and the two bottom
+direction keys move within the current section. Back opens the compact system menu; Confirm opens the focused item.
+Changing back to Classic, Lyra, Lyra Extended, or RoundedRaff restores the original home screen.
+
 ### Reading stats
 
 Streak, minutes this week, books finished, total time, and a calendar of the days you read. Recorded as you go, every few minutes and again when you close a book, so a flat battery costs you minutes rather than the whole session.

@@ -3,7 +3,6 @@
 #include <EpdFontFamily.h>
 
 #include <functional>
-#include <memory>
 
 #include "CrossPointSettings.h"
 #include "components/themes/BaseTheme.h"
@@ -65,7 +64,10 @@ class UITheme {
 
  private:
   const ThemeMetrics* currentMetrics;
-  std::unique_ptr<BaseTheme> currentTheme;
+  // Theme instances are stateless and live for the process lifetime. Keeping a
+  // pointer avoids a delete/new cycle and heap fragmentation on every preview
+  // change in Settings.
+  const BaseTheme* currentTheme;
   mutable ThemeMetrics adjustedMetrics;
   mutable bool metricsValid = false;
   mutable bool metricsForTouch = false;

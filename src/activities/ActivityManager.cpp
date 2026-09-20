@@ -13,9 +13,11 @@
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
 #include "browser/OpdsBookBrowserActivity.h"
+#include "components/UITheme.h"
 #include "home/CrashActivity.h"
 #include "home/FileBrowserActivity.h"
 #include "home/HomeActivity.h"
+#include "home/ReadingHubActivity.h"
 #include "home/ReadingStatsActivity.h"
 #include "library/CoverLibraryActivity.h"
 #include "library/LibraryListActivity.h"
@@ -297,6 +299,26 @@ void ActivityManager::goToLibrary() {
   replaceActivity(std::move(activity));
 }
 
+void ActivityManager::goToReadingQueue() {
+  auto activity =
+      makeUniqueNoThrow<CoverLibraryActivity>(renderer, mappedInput, CoverLibraryActivity::InitialView::QUEUE);
+  if (!activity) {
+    LOG_ERR("ACT", "OOM: reading queue activity");
+    return;
+  }
+  replaceActivity(std::move(activity));
+}
+
+void ActivityManager::goToCompletedLibrary() {
+  auto activity =
+      makeUniqueNoThrow<CoverLibraryActivity>(renderer, mappedInput, CoverLibraryActivity::InitialView::COMPLETED);
+  if (!activity) {
+    LOG_ERR("ACT", "OOM: completed library activity");
+    return;
+  }
+  replaceActivity(std::move(activity));
+}
+
 void ActivityManager::goToBrowser() {
   const auto& servers = OPDS_STORE.getServers();
   // Skip the server picker when there's only one server configured
@@ -346,6 +368,10 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem, bool cleanInitialRefr
       initialMenuItem = HomeMenuItem::FILE_BROWSER;
     } else if (activityName == "Library") {
       initialMenuItem = HomeMenuItem::LIBRARY;
+    } else if (activityName == "ReadingQueue") {
+      initialMenuItem = HomeMenuItem::READING_QUEUE;
+    } else if (activityName == "CompletedLibrary") {
+      initialMenuItem = HomeMenuItem::COMPLETED_LIBRARY;
     } else if (activityName == "OpdsBookBrowser") {
       initialMenuItem = HomeMenuItem::OPDS_BROWSER;
     } else if (activityName == "CrossPointWebServer") {
@@ -354,8 +380,24 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem, bool cleanInitialRefr
       initialMenuItem = HomeMenuItem::SETTINGS_MENU;
     }
   }
-  replaceActivity(
-      std::make_unique<HomeActivity>(renderer, mappedInput, initialMenuItem, cleanInitialRefresh || leftReaderFrame));
+  if (GUI.rootExperience() == RootExperience::READING_HUB) {
+    auto activity = makeUniqueNoThrow<ReadingHubActivity>(renderer, mappedInput, initialMenuItem,
+                                                          cleanInitialRefresh || leftReaderFrame);
+    if (!activity) {
+      LOG_ERR("ACT", "OOM: Reading Hub activity");
+      return;
+    }
+    replaceActivity(std::move(activity));
+    return;
+  }
+
+  auto activity =
+      makeUniqueNoThrow<HomeActivity>(renderer, mappedInput, initialMenuItem, cleanInitialRefresh || leftReaderFrame);
+  if (!activity) {
+    LOG_ERR("ACT", "OOM: Home activity");
+    return;
+  }
+  replaceActivity(std::move(activity));
 }
 void ActivityManager::goToCrashReport() { replaceActivity(std::make_unique<CrashActivity>(renderer, mappedInput)); }
 

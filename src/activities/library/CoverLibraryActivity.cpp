@@ -17,8 +17,8 @@
 #include <cstdio>
 #include <memory>
 
-#include "MappedInputManager.h"
 #include "LibraryBookInput.h"
+#include "MappedInputManager.h"
 #include "ReadingStatsStore.h"
 #include "RecentBooksStore.h"
 #include "activities/home/BookStatsActivity.h"
@@ -1063,11 +1063,22 @@ void CoverLibraryActivity::onEnter() {
   startLibraryScan();
   backgroundProgressTurn_ = true;
 
-  selectedTab = 0;
+  selectedTab = initialView == InitialView::QUEUE ? 2 : (initialView == InitialView::ACTIVE ? 0 : 1);
   contentIndex = 0;
   scrollRow = 0;
   shelvesScroll = 0;
   openShelfIndex = -1;
+  if (selectedTab == 1) {
+    loadShelves();
+    if (initialView == InitialView::COMPLETED) {
+      const auto completed =
+          std::find_if(shelves.begin(), shelves.end(), [](const ShelfInfo& shelf) { return shelf.completed; });
+      if (completed != shelves.end()) {
+        openShelfIndex = static_cast<int>(completed - shelves.begin());
+        loadShelfBooks(openShelfIndex);
+      }
+    }
+  }
   requestUpdate();
 }
 

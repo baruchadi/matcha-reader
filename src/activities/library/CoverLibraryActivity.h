@@ -22,6 +22,9 @@
 enum class BookAction : uint32_t;
 
 class CoverLibraryActivity final : public Activity {
+ public:
+  enum class InitialView : uint8_t { ACTIVE = 0, SHELVES = 1, QUEUE = 2, COMPLETED = 3 };
+
  private:
   ButtonNavigator buttonNavigator;
 
@@ -45,6 +48,7 @@ class CoverLibraryActivity final : public Activity {
   std::vector<uint16_t> activeBookIndices;
   std::vector<uint16_t> queueBookIndices;
   ReadingQueueStore readingQueueStore;
+  const InitialView initialView;
 
   struct BookProgress {
     int percent = -1;
@@ -322,8 +326,13 @@ class CoverLibraryActivity final : public Activity {
   void showBookStats(const std::string& path, const std::string& title);
 
  public:
-  explicit CoverLibraryActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("RecentBooks", renderer, mappedInput) {}
+  explicit CoverLibraryActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
+                                InitialView initialViewValue = InitialView::ACTIVE)
+      : Activity(initialViewValue == InitialView::QUEUE       ? "ReadingQueue"
+                 : initialViewValue == InitialView::COMPLETED ? "CompletedLibrary"
+                                                              : "Library",
+                 renderer, mappedInput),
+        initialView(initialViewValue) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

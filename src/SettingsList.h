@@ -281,7 +281,7 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
                           "refreshFrequency", StrId::STR_CAT_DISPLAY),
         SettingInfo::Enum(StrId::STR_UI_THEME, &CrossPointSettings::uiTheme,
                           {StrId::STR_THEME_CLASSIC, StrId::STR_THEME_LYRA, StrId::STR_THEME_LYRA_EXTENDED,
-                           StrId::STR_THEME_ROUNDEDRAFF},
+                           StrId::STR_THEME_ROUNDEDRAFF, StrId::STR_THEME_READING_HUB},
                           "uiTheme", StrId::STR_CAT_DISPLAY),
         SettingInfo::Toggle(StrId::STR_SUNLIGHT_FADING_FIX, &CrossPointSettings::fadingFix, "fadingFix",
                             StrId::STR_CAT_DISPLAY),
@@ -391,10 +391,9 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
                            StrId::STR_BOOK_ACTIONS},
                           "shortPwrBtn", StrId::STR_CAT_SHORTCUTS)
             .withEnumOrder({CrossPointSettings::IGNORE, CrossPointSettings::PWR_BOOK_ACTIONS,
-                            CrossPointSettings::PWR_PREV_PAGE,
-                            CrossPointSettings::PAGE_TURN, CrossPointSettings::SLEEP, CrossPointSettings::FORCE_REFRESH,
-                            CrossPointSettings::FOOTNOTES, CrossPointSettings::WORD_LOOKUP,
-                            CrossPointSettings::PWR_CONFIRM}),
+                            CrossPointSettings::PWR_PREV_PAGE, CrossPointSettings::PAGE_TURN, CrossPointSettings::SLEEP,
+                            CrossPointSettings::FORCE_REFRESH, CrossPointSettings::FOOTNOTES,
+                            CrossPointSettings::WORD_LOOKUP, CrossPointSettings::PWR_CONFIRM}),
         // Erased below unless the QMI8658 IMU is present (X3).
         SettingInfo::Enum(StrId::STR_TILT_PAGE_TURN, &CrossPointSettings::tiltPageTurn,
                           {StrId::STR_STATE_OFF, StrId::STR_NORMAL, StrId::STR_INVERTED}, "tiltPageTurn",
