@@ -76,8 +76,10 @@ class BookMetadataCache {
   };
   std::deque<SpineHrefIndexEntry> spineHrefIndex;
   bool useSpineHrefIndex = false;
+  uint16_t sequentialSpineCursor = 0;
 
   static constexpr uint16_t LARGE_SPINE_THRESHOLD = 400;
+  static constexpr uint16_t MAX_SPINE_HREF_INDEX_ENTRIES = 512;
 
   // FNV-1a 64-bit hash function
   static uint64_t fnvHash64(const std::string& s) {
