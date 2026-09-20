@@ -222,8 +222,17 @@ void EpubReaderWordLookupActivity::onEnter() {
       openAtY = selectCtx.lookupAtY;
       if (resolveOpenPoint()) return;
     }
+    // Still waiting on the scan to reach the held word (a cold page maps ~a third of itself in the
+    // opening burst). Draw NO cursor until it does: a box on the remembered word, or on the first
+    // one, is a box on a word the reader did not point at -- and the definition that opens a
+    // moment later covers only part of the page, so that box stays visible beside the right entry.
+    // resolvePendingMove()/loop() place the cursor once the point resolves, or when it gives up.
+    if (openAtX >= 0) {
+      requestUpdate();
+      return;
+    }
     // A restored position wins: it is where this reader actually was on this page.
-    if (openAtX < 0 && !restored) {
+    if (!restored) {
       cursorIndex = 0;
       selectMiddleOfPage();
     }
@@ -1424,8 +1433,11 @@ void EpubReaderWordLookupActivity::loop() {
         performLookup();
         requestUpdate();
       }
-    } else if (cursorBoxCount == 0 && !scan.selectableGlyphs.empty()) {
-      refreshCursorBoxes();  // first word of a cold page found: draw the cursor onto it
+    } else if (openAtX < 0 && cursorBoxCount == 0 && !scan.selectableGlyphs.empty()) {
+      // First word of a cold page found: draw the cursor onto it. Not while a hold's point is
+      // still waiting to resolve -- the first word is not the word under the finger, and the
+      // definition about to open would leave that wrong box showing beside it (#300 follow-up).
+      refreshCursorBoxes();
       requestUpdate();
     }
     if (done) {
