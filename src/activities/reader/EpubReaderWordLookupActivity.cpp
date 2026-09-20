@@ -1904,9 +1904,27 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
   // normally guarantees that, but a long press skips it and can arrive with a framebuffer the
   // chapter build used as scratch -- the card then sat on a blank screen on the first lookup
   // after opening a book. A failed repaint leaves the flag clear, so the next render retries.
+  bool pageJustRepainted = false;
   if (selectCtx.valid() && !pageBehindCard) {
     renderer.clearScreen();
     pageBehindCard = selectCtx.repaintPage(selectCtx.repaintCtx);
+    pageJustRepainted = pageBehindCard;
+  }
+
+  // Put the highlight on the word this entry is for. Select mode draws the box, but the cursor
+  // can move after that and go straight here -- a tap on another word, or a hold -- which left
+  // the old box on the page beside the new entry. Erase what is on the page and XOR the current
+  // cursor in, so the word under the card and the word in it are always the same one. A repaint
+  // just above took the old box with it, so there is then nothing to erase.
+  if (selectCtx.valid() && pageBehindCard) {
+    if (pageJustRepainted) drawnBoxCount = 0;
+    invertBoxes(drawnBoxes, drawnBoxCount);
+    portENTER_CRITICAL(&boxMux);
+    const int boxes = cursorBoxCount;
+    for (int i = 0; i < boxes; i++) drawnBoxes[i] = cursorBoxes[i];
+    portEXIT_CRITICAL(&boxMux);
+    drawnBoxCount = boxes;
+    invertBoxes(drawnBoxes, drawnBoxCount);
   }
 
   // Counter, right-aligned on the headword line. Paged mode counts pages of the definition;
