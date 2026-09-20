@@ -96,7 +96,9 @@ settings on one screen, starting with the view switch: **Matcha Covers** (the de
 **Settings → Display → UI Theme → Reading Hub** replaces the traditional home menu with four root sections:
 **Now**, **Library**, **Queue**, and **Read**. On button devices, the side keys switch sections and the two bottom
 direction keys move within the current section. Back opens the compact system menu; Confirm opens the focused item.
-Changing back to Classic, Lyra, Lyra Extended, or RoundedRaff restores the original home screen.
+Library, queue, and completed-book summaries come from compact persisted indexes, so the root screen does not load or
+duplicate the full catalog. Changing back to Classic, Lyra, Lyra Extended, or RoundedRaff restores the original home
+screen.
 
 ### Reading stats
 

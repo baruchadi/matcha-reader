@@ -362,6 +362,22 @@ bool ReadingStatsStore::hasReadToday(uint16_t year, uint8_t month, uint8_t day) 
   return getMinutesForDay(year, month, day) > 0;
 }
 
+bool ReadingStatsStore::readFinishedCountFromFile(uint16_t& outCount) {
+  outCount = 0;
+  HalFile f;
+  if (!Storage.openFileForRead("STAT", statsPath().c_str(), f)) return false;
+
+  uint8_t version = 0;
+  uint16_t dayCount = 0;
+  const bool prefixRead =
+      f.read(&version, 1) == 1 && f.read(reinterpret_cast<uint8_t*>(&dayCount), sizeof(dayCount)) == sizeof(dayCount);
+  const bool countRead =
+      prefixRead && version >= 2 && f.read(reinterpret_cast<uint8_t*>(&outCount), sizeof(outCount)) == sizeof(outCount);
+  f.close();
+  if (!countRead) outCount = 0;
+  return countRead;
+}
+
 int ReadingStatsStore::getStreak(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const {
   // Backwards through the sorted history, rather than probing one candidate date per day.
   if (days.empty()) return 0;

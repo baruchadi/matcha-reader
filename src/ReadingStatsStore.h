@@ -118,6 +118,9 @@ class ReadingStatsStore {
   int getDaysRead() const;
   uint32_t getTotalMinutes() const;
   uint16_t getBooksFinished() const { return booksFinished; }
+  // Home only needs the Completed count. Reading the five-byte file prefix avoids loading the
+  // full multi-year stats history (and its vectors) just to draw one summary row.
+  static bool readFinishedCountFromFile(uint16_t& outCount);
 
   uint16_t getMinutesForDay(uint16_t year, uint8_t month, uint8_t day) const;
   uint16_t getMinutesThisWeek(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const;

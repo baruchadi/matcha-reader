@@ -3,10 +3,13 @@
 #include <GfxRenderer.h>
 #include <HalDisplay.h>
 #include <I18n.h>
+#include <LibraryBuilder.h>
+#include <LibraryIndexFile.h>
 
 #include <algorithm>
 #include <cstdio>
 
+#include "ReadingStatsStore.h"
 #include "RecentBooksStore.h"
 #include "activities/ActivityManager.h"
 #include "components/UITheme.h"
@@ -47,6 +50,11 @@ void ReadingHubActivity::onEnter() {
 
   queueStore.clear();
   queueStore.loadFromFile();
+  library::LibraryIndexFile index;
+  libraryCountKnown = index.open(library::libraryIndexPath());
+  libraryBookCount = libraryCountKnown ? index.bookCount() : 0;
+  index.close();
+  ReadingStatsStore::readFinishedCountFromFile(completedBookCount);
   selectedRow = 0;
   menuOpen = false;
   firstPaint = true;
@@ -60,13 +68,12 @@ void ReadingHubActivity::onExit() {
 }
 
 const char* ReadingHubActivity::sectionLabel() const {
-  static constexpr StrId SECTION_LABELS[SECTION_COUNT] = {
-      StrId::STR_HUB_NOW, StrId::STR_HUB_LIBRARY, StrId::STR_HUB_QUEUE, StrId::STR_HUB_READ};
+  static constexpr StrId SECTION_LABELS[SECTION_COUNT] = {StrId::STR_HUB_NOW, StrId::STR_HUB_LIBRARY,
+                                                          StrId::STR_HUB_QUEUE, StrId::STR_HUB_READ};
   return I18N.get(SECTION_LABELS[static_cast<int>(section)]);
 }
 
-int ReadingHubActivity::buildRows(std::array<ReadingHubRow, MAX_ROWS>& rows, char* queueStatus,
-                                  const size_t queueStatusSize) const {
+int ReadingHubActivity::buildRows(std::array<ReadingHubRow, MAX_ROWS>& rows, RowText& text) const {
   if (menuOpen) {
     rows[0] = {tr(STR_BROWSE_FILES), ""};
     rows[1] = {tr(STR_FILE_TRANSFER), ""};
@@ -77,27 +84,35 @@ int ReadingHubActivity::buildRows(std::array<ReadingHubRow, MAX_ROWS>& rows, cha
 
   const unsigned queueSize = static_cast<unsigned>(queueStore.queue().size());
   if (queueSize == 0) {
-    snprintf(queueStatus, queueStatusSize, "%s", tr(STR_HUB_QUEUE_EMPTY));
+    snprintf(text.queueStatus, sizeof(text.queueStatus), "%s", tr(STR_HUB_QUEUE_EMPTY));
   } else {
-    snprintf(queueStatus, queueStatusSize, tr(STR_HUB_QUEUE_COUNT), queueSize);
+    snprintf(text.queueStatus, sizeof(text.queueStatus), tr(STR_HUB_QUEUE_COUNT), queueSize);
   }
+  if (libraryCountKnown) {
+    snprintf(text.libraryStatus, sizeof(text.libraryStatus), tr(STR_HUB_LIBRARY_COUNT),
+             static_cast<unsigned>(libraryBookCount));
+  } else {
+    snprintf(text.libraryStatus, sizeof(text.libraryStatus), "%s", tr(STR_HUB_ALL_BOOKS));
+  }
+  snprintf(text.completedStatus, sizeof(text.completedStatus), tr(STR_HUB_COMPLETED_COUNT),
+           static_cast<unsigned>(completedBookCount));
 
   switch (section) {
     case Section::NOW:
       rows[0] = {currentBook ? currentBook->title.c_str() : tr(STR_NO_OPEN_BOOK),
                  currentBook ? currentBook->author.c_str() : tr(STR_START_READING)};
-      rows[1] = {tr(STR_HUB_OPEN_QUEUE), queueStatus};
-      rows[2] = {tr(STR_HUB_COMPLETED_BOOKS), tr(STR_HUB_FINISHED_BOOKS)};
+      rows[1] = {tr(STR_HUB_OPEN_QUEUE), text.queueStatus};
+      rows[2] = {tr(STR_HUB_COMPLETED_BOOKS), text.completedStatus};
       return 3;
     case Section::LIBRARY:
-      rows[0] = {tr(STR_HUB_OPEN_LIBRARY), tr(STR_MENU_RECENT_BOOKS)};
+      rows[0] = {tr(STR_HUB_OPEN_LIBRARY), text.libraryStatus};
       rows[1] = {tr(STR_BROWSE_FILES), ""};
       return 2;
     case Section::QUEUE:
-      rows[0] = {tr(STR_HUB_OPEN_QUEUE), queueStatus};
+      rows[0] = {tr(STR_HUB_OPEN_QUEUE), text.queueStatus};
       return 1;
     case Section::READ:
-      rows[0] = {tr(STR_HUB_COMPLETED_BOOKS), tr(STR_HUB_FINISHED_BOOKS)};
+      rows[0] = {tr(STR_HUB_COMPLETED_BOOKS), text.completedStatus};
       rows[1] = {tr(STR_STATS), ""};
       return 2;
   }
@@ -113,8 +128,8 @@ void ReadingHubActivity::stepSection(const int delta) {
 
 void ReadingHubActivity::stepRow(const int delta) {
   std::array<ReadingHubRow, MAX_ROWS> rows{};
-  char queueStatus[40] = {0};
-  const int rowCount = buildRows(rows, queueStatus, sizeof(queueStatus));
+  RowText text;
+  const int rowCount = buildRows(rows, text);
   if (rowCount <= 0) return;
   selectedRow = reading_hub::stepRow(selectedRow, delta, rowCount);
   requestUpdate();
@@ -203,16 +218,15 @@ void ReadingHubActivity::render(RenderLock&&) {
   const int width = renderer.getScreenWidth();
   const int height = renderer.getScreenHeight();
   std::array<ReadingHubRow, MAX_ROWS> rows{};
-  char queueStatus[40] = {0};
-  const int rowCount = buildRows(rows, queueStatus, sizeof(queueStatus));
+  RowText text;
+  const int rowCount = buildRows(rows, text);
   selectedRow = std::clamp(selectedRow, 0, std::max(0, rowCount - 1));
 
   char title[40] = {0};
   if (menuOpen) {
     snprintf(title, sizeof(title), "%s", tr(STR_HUB_MENU));
   } else {
-    snprintf(title, sizeof(title), tr(STR_HUB_SECTION_POSITION), sectionLabel(),
-             static_cast<unsigned>(section) + 1);
+    snprintf(title, sizeof(title), tr(STR_HUB_SECTION_POSITION), sectionLabel(), static_cast<unsigned>(section) + 1);
   }
 
   renderer.clearScreen();
@@ -224,8 +238,8 @@ void ReadingHubActivity::render(RenderLock&&) {
                      std::max(0, contentBottom - contentTop)};
   GUI.drawReadingHubRows(renderer, content, rows.data(), rowCount, selectedRow);
 
-  const auto labels = mappedInput.mapLabels(menuOpen ? tr(STR_BACK) : tr(STR_HUB_MENU), tr(STR_OPEN),
-                                             tr(STR_HUB_MOVE), tr(STR_HUB_MOVE));
+  const auto labels = mappedInput.mapLabels(menuOpen ? tr(STR_BACK) : tr(STR_HUB_MENU), tr(STR_OPEN), tr(STR_HUB_MOVE),
+                                            tr(STR_HUB_MOVE));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   GUI.drawSideButtonHints(renderer, tr(STR_HUB_PREVIOUS_SECTION), tr(STR_HUB_NEXT_SECTION));
 

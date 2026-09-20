@@ -3,8 +3,8 @@
 #include <array>
 #include <cstdint>
 
-#include "ReadingQueueStore.h"
 #include "ReadingHubNavigation.h"
+#include "ReadingQueueStore.h"
 #include "activities/Activity.h"
 #include "components/themes/BaseTheme.h"
 
@@ -33,8 +33,17 @@ class ReadingHubActivity final : public Activity {
   bool firstPaint = true;
   const RecentBook* currentBook = nullptr;
   ReadingQueueStore queueStore;
+  uint16_t libraryBookCount = 0;
+  uint16_t completedBookCount = 0;
+  bool libraryCountKnown = false;
 
-  int buildRows(std::array<ReadingHubRow, MAX_ROWS>& rows, char* queueStatus, size_t queueStatusSize) const;
+  struct RowText {
+    char libraryStatus[40]{};
+    char queueStatus[40]{};
+    char completedStatus[40]{};
+  };
+
+  int buildRows(std::array<ReadingHubRow, MAX_ROWS>& rows, RowText& text) const;
   const char* sectionLabel() const;
   void stepSection(int delta);
   void stepRow(int delta);
