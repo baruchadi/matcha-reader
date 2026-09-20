@@ -222,8 +222,17 @@ void EpubReaderWordLookupActivity::onEnter() {
       openAtY = selectCtx.lookupAtY;
       if (resolveOpenPoint()) return;
     }
+    // Still waiting on the scan to reach the held word (a cold page maps ~a third of itself in the
+    // opening burst). Draw NO cursor until it does: a box on the remembered word, or on the first
+    // one, is a box on a word the reader did not point at -- and the definition that opens a
+    // moment later covers only part of the page, so that box stays visible beside the right entry.
+    // resolvePendingMove()/loop() place the cursor once the point resolves, or when it gives up.
+    if (openAtX >= 0) {
+      requestUpdate();
+      return;
+    }
     // A restored position wins: it is where this reader actually was on this page.
-    if (openAtX < 0 && !restored) {
+    if (!restored) {
       cursorIndex = 0;
       selectMiddleOfPage();
     }
@@ -1424,8 +1433,11 @@ void EpubReaderWordLookupActivity::loop() {
         performLookup();
         requestUpdate();
       }
-    } else if (cursorBoxCount == 0 && !scan.selectableGlyphs.empty()) {
-      refreshCursorBoxes();  // first word of a cold page found: draw the cursor onto it
+    } else if (openAtX < 0 && cursorBoxCount == 0 && !scan.selectableGlyphs.empty()) {
+      // First word of a cold page found: draw the cursor onto it. Not while a hold's point is
+      // still waiting to resolve -- the first word is not the word under the finger, and the
+      // definition about to open would leave that wrong box showing beside it (#300 follow-up).
+      refreshCursorBoxes();
       requestUpdate();
     }
     if (done) {
@@ -1892,9 +1904,27 @@ void EpubReaderWordLookupActivity::render(RenderLock&&) {
   // normally guarantees that, but a long press skips it and can arrive with a framebuffer the
   // chapter build used as scratch -- the card then sat on a blank screen on the first lookup
   // after opening a book. A failed repaint leaves the flag clear, so the next render retries.
+  bool pageJustRepainted = false;
   if (selectCtx.valid() && !pageBehindCard) {
     renderer.clearScreen();
     pageBehindCard = selectCtx.repaintPage(selectCtx.repaintCtx);
+    pageJustRepainted = pageBehindCard;
+  }
+
+  // Put the highlight on the word this entry is for. Select mode draws the box, but the cursor
+  // can move after that and go straight here -- a tap on another word, or a hold -- which left
+  // the old box on the page beside the new entry. Erase what is on the page and XOR the current
+  // cursor in, so the word under the card and the word in it are always the same one. A repaint
+  // just above took the old box with it, so there is then nothing to erase.
+  if (selectCtx.valid() && pageBehindCard) {
+    if (pageJustRepainted) drawnBoxCount = 0;
+    invertBoxes(drawnBoxes, drawnBoxCount);
+    portENTER_CRITICAL(&boxMux);
+    const int boxes = cursorBoxCount;
+    for (int i = 0; i < boxes; i++) drawnBoxes[i] = cursorBoxes[i];
+    portEXIT_CRITICAL(&boxMux);
+    drawnBoxCount = boxes;
+    invertBoxes(drawnBoxes, drawnBoxCount);
   }
 
   // Counter, right-aligned on the headword line. Paged mode counts pages of the definition;
