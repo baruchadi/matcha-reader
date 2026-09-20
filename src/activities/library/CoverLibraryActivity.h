@@ -6,14 +6,20 @@
 
 #include <array>
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "LibraryPerformance.h"
+#include "ReadingQueueStore.h"
 #include "RecentBooksStore.h"
 #include "activities/Activity.h"
 #include "components/UITheme.h"  // TabInfo, Rect
 #include "util/ButtonNavigator.h"
+
+enum class BookAction : uint32_t;
 
 class CoverLibraryActivity final : public Activity {
  private:
@@ -24,7 +30,6 @@ class CoverLibraryActivity final : public Activity {
   int scrollRow = 0;      // Books tab: first visible grid row
   int shelvesScroll = 0;  // Shelves tab: first visible list row
 
-  bool longPressFired = false;
   // A shelf opens on the Confirm PRESS, so the release of that same physical click arrives with
   // the shelf's book list already on screen -- where it read as "open the focused book", opening
   // one the moment a shelf was entered. Cleared on entry and set by a FRESH press, so only a
@@ -34,6 +39,12 @@ class CoverLibraryActivity final : public Activity {
 
   // Books tab
   std::vector<RecentBook> recentBooks;
+  // Lightweight projections into recentBooks: two bytes per catalog entry instead of copying
+  // title/author/cover strings into each view. Completed books leave Active; Queue retains the
+  // user's explicit order. The full catalog remains available to shelves and the background scan.
+  std::vector<uint16_t> activeBookIndices;
+  std::vector<uint16_t> queueBookIndices;
+  ReadingQueueStore readingQueueStore;
 
   struct BookProgress {
     int percent = -1;
@@ -48,6 +59,7 @@ class CoverLibraryActivity final : public Activity {
     // Resolved path to a small (shelf-height) thumbnail that renders 1:1.
     std::string shelfThumbPath;
     int bookCount = 0;
+    bool completed = false;  // virtual achievement shelf, not a physical SD folder
   };
   std::vector<ShelfInfo> shelves;
   bool shelvesLoaded = false;
@@ -57,6 +69,7 @@ class CoverLibraryActivity final : public Activity {
     std::string path;
     std::string title;
     std::string coverBmpPath;
+    bool completed = false;
   };
   std::vector<ShelfBook> shelfBooks;
   std::vector<BookProgress> shelfBookProgress;
@@ -64,7 +77,7 @@ class CoverLibraryActivity final : public Activity {
   int shelfContentIndex = 0;
   int shelfScrollRow = 0;
 
-  static constexpr int TAB_COUNT = 2;
+  static constexpr int TAB_COUNT = 3;
   static constexpr int GRID_COLS = 3;
   static constexpr int GRID_ROW_GAP = 16;
   static constexpr int COVER_PADDING = 4;
@@ -93,6 +106,11 @@ class CoverLibraryActivity final : public Activity {
 
   void loadRecentBooks();
   void loadBookProgress();
+  void rebuildBookViews(bool pruneMissing = false);
+  [[nodiscard]] bool isBookGridTab() const { return selectedTab == 0 || selectedTab == 2; }
+  [[nodiscard]] const std::vector<uint16_t>& displayedBookIndices() const;
+  [[nodiscard]] const RecentBook* displayedBookAt(int displayIndex) const;
+  [[nodiscard]] int displayedBookProgressAt(int displayIndex) const;
   // A pointer-style selector belongs to key navigation. Touch users act on what they
   // touch, so a highlight sitting on some other cover is just noise -- and worse, it
   // implies the swipe moved it. Set by the nav keys, cleared by any touch.
@@ -116,10 +134,8 @@ class CoverLibraryActivity final : public Activity {
   // Shelf index under a screen point in the Shelves list, or -1 for a miss.
   [[nodiscard]] int shelfRowAtPoint(int x, int y, int contentTop, int contentHeight) const;
   void loadShelves();
-  void loadShelfBooks(const std::string& folderPath);
+  void loadShelfBooks(int shelfIndex);
   int readProgressPercent(const std::string& bookPath) const;
-  void fillPageProgressNow(std::vector<BookProgress>& progress, const std::vector<RecentBook>* books,
-                           const std::vector<ShelfBook>* sBooks, int firstIdx, int lastIdx);
 
   int getContentItemCount() const;
   void renderBooksTab(int contentTop, int contentHeight);
@@ -178,11 +194,13 @@ class CoverLibraryActivity final : public Activity {
   struct LibraryScanState {
     bool active = false;
     bool walkDone = false;
+    bool indexLoaded = false;
     std::vector<std::string> dirStack;
     HalFile activeDir;
     std::string activeDirPath;
     std::array<char, 500> nameBuf{};
     std::vector<RecentBook> results;
+    SortedLibraryLookup<RecentBook, std::string_view> cachedBookLookup;
     size_t thumbIndex = 0;  // cover-thumb pass cursor over the live catalog
   };
   LibraryScanState scan_;
@@ -210,6 +228,7 @@ class CoverLibraryActivity final : public Activity {
   // and MangaBook expose no equivalent predicate, so they keep retrying.
   static constexpr uint8_t INDEX_FLAG_NO_COVER = 1 << 1;
   std::vector<LibraryIndexEntry> libraryIndex_;
+  SortedLibraryLookup<LibraryIndexEntry, uint32_t> libraryIndexLookup_;
   bool libraryIndexDirty_ = false;
 
   // One lower-priority cover job at a time. Release/acquire stores on busy publish the job to
@@ -269,6 +288,8 @@ class CoverLibraryActivity final : public Activity {
 
   void loadLibraryIndex();
   void saveLibraryIndex();
+  static std::string_view recentBookPathKey(const RecentBook& book) { return book.path; }
+  static uint32_t libraryIndexHashKey(const LibraryIndexEntry& entry) { return entry.pathHash; }
   const LibraryIndexEntry* findIndexEntry(uint32_t pathHash) const;
   void recordIndexEntry(const std::string& path, uint32_t fileSize, uint32_t modifiedStamp, int thumbHeight,
                         bool hasThumb, bool coverKnownAbsent = false);
@@ -288,10 +309,16 @@ class CoverLibraryActivity final : public Activity {
   // Progress percentages fill progressively from loop() (PROGRESS_PENDING sentinel) instead of
   // ~5 file reads per book up front.
   static constexpr int PROGRESS_PENDING = -2;
+  size_t progressWarmCursor_ = 0;
+  size_t shelfProgressWarmCursor_ = 0;
+  bool backgroundProgressTurn_ = true;
   void markAllProgressPending();
   void warmOnePendingProgress();
 
-  // Long-press on a book opens its reading stats.
+  // Long-press opens the integrated status/queue/stats menu.
+  void showBookActions(const std::string& path, const std::string& title);
+  void applyBookAction(BookAction action, const std::string& path, const std::string& title);
+  void refreshBookViewsAfterAction(const std::string& actedPath);
   void showBookStats(const std::string& path, const std::string& title);
 
  public:

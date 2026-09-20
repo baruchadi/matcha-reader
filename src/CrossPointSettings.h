@@ -179,6 +179,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     // Previous Page is appended at the end for the same reason: inserting it
     // beside PAGE_TURN would shift every stored index after it.
     PWR_PREV_PAGE = 7,
+    // Context action for the focused book in Library. Appended so every previously
+    // persisted shortcut keeps its meaning.
+    PWR_BOOK_ACTIONS = 8,
     SHORT_PWRBTN_COUNT
   };
 

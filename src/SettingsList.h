@@ -378,7 +378,8 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
         SettingInfo::Toggle(StrId::STR_DBL_CLICK_PWR_LIGHT, &CrossPointSettings::doubleClickPwrLight,
                             "doubleClickPwrLight", StrId::STR_CAT_SHORTCUTS),
         // Word Lookup keeps index 5 on every board -- it is Matcha's and already persisted.
-        // Confirm is appended at 6 (upstream put it at 5); Previous Page is appended at 7.
+        // Confirm is appended at 6 (upstream put it at 5); Previous Page is appended at 7 and
+        // Book Actions at 8.
         // The indices are identical on touch and button boards so a stored value keeps its
         // meaning across them; Confirm simply has no handler where a front Confirm key exists.
         // Labels stay indexed BY STORED VALUE; withEnumOrder() only decides what the menu offers
@@ -386,9 +387,11 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
         // reading it seven rows below Next Page was confusing -- so the two are offered together.
         SettingInfo::Enum(StrId::STR_SHORT_PWR_BTN, &CrossPointSettings::shortPwrBtn,
                           {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_NEXT_PAGE_OPT, StrId::STR_FORCE_REFRESH,
-                           StrId::STR_FOOTNOTES, StrId::STR_WORD_LOOKUP, StrId::STR_CONFIRM, StrId::STR_PREVIOUS_PAGE},
+                           StrId::STR_FOOTNOTES, StrId::STR_WORD_LOOKUP, StrId::STR_CONFIRM, StrId::STR_PREVIOUS_PAGE,
+                           StrId::STR_BOOK_ACTIONS},
                           "shortPwrBtn", StrId::STR_CAT_SHORTCUTS)
-            .withEnumOrder({CrossPointSettings::IGNORE, CrossPointSettings::PWR_PREV_PAGE,
+            .withEnumOrder({CrossPointSettings::IGNORE, CrossPointSettings::PWR_BOOK_ACTIONS,
+                            CrossPointSettings::PWR_PREV_PAGE,
                             CrossPointSettings::PAGE_TURN, CrossPointSettings::SLEEP, CrossPointSettings::FORCE_REFRESH,
                             CrossPointSettings::FOOTNOTES, CrossPointSettings::WORD_LOOKUP,
                             CrossPointSettings::PWR_CONFIRM}),

@@ -169,6 +169,18 @@ bool RecentBooksStore::pruneMissing() {
   return recentBooks.size() != before;
 }
 
+bool RecentBooksStore::retainBooksPresentIn(const std::vector<RecentBook>& catalog) {
+  const size_t before = recentBooks.size();
+  recentBooks.erase(std::remove_if(recentBooks.begin(), recentBooks.end(),
+                                   [&](const RecentBook& recent) {
+                                     return std::none_of(catalog.begin(), catalog.end(), [&](const RecentBook& book) {
+                                       return book.path == recent.path;
+                                     });
+                                   }),
+                    recentBooks.end());
+  return recentBooks.size() != before;
+}
+
 RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
   std::string lastBookFileName = "";
   const size_t lastSlash = path.find_last_of('/');

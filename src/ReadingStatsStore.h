@@ -84,6 +84,13 @@ class ReadingStatsStore {
   uint16_t getMinutesForDay(const char* language, uint16_t year, uint8_t month, uint8_t day) const;
   uint32_t getTotalMinutes(const char* language) const;
   void markBookFinished(const std::string& bookPath);
+  // Completion is the book's reading status, not a second library-only flag. Manual status
+  // changes therefore use the same persisted list readers update at end-of-book, while leaving
+  // the resume-position cache untouched.
+  [[nodiscard]] bool isBookFinished(const std::string& bookPath) const;
+  bool setBookFinished(const std::string& bookPath, bool finished);
+  // Repoint completion and per-book totals when a file or containing folder is renamed.
+  bool updateBookPath(const std::string& oldPath, const std::string& newPath);
 
   // ---- per-language views, mirroring the overall ones ----
   // Every language read, most-read first. Written into the caller's vector so the store keeps

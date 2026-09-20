@@ -7,6 +7,8 @@
 
 #include <functional>
 
+#include "ReadingQueueStore.h"
+#include "ReadingStatsStore.h"
 #include "RecentBooksStore.h"
 #include "util/BookmarkUtil.h"
 
@@ -150,11 +152,20 @@ bool renamePathWithState(const std::string& oldPath, const std::string& newPath,
 
   // Pass 3: recents. The walk now has to run over the NEW path, and reports the new book paths,
   // so each entry is mapped back to find what it used to be.
+  const bool statsLoaded = READING_STATS_STORE.loadFromFile();
+  ReadingQueueStore queueStore;
+  const bool queueLoaded = queueStore.loadFromFile();
+  bool statsChanged = false;
+  bool queueChanged = false;
   forEachBook(newPath, 0, [&](const std::string& newBookPath) {
     const std::string oldBookPath = rebase(newBookPath, newPath, oldPath);
     RECENT_BOOKS.updatePath(oldBookPath, newBookPath, bookCachePath(oldBookPath), bookCachePath(newBookPath));
+    if (statsLoaded) statsChanged = READING_STATS_STORE.updateBookPath(oldBookPath, newBookPath) || statsChanged;
+    if (queueLoaded) queueChanged = queueStore.queue().updatePath(oldBookPath, newBookPath) || queueChanged;
     return true;
   });
+  if (statsChanged) READING_STATS_STORE.saveToFile();
+  if (queueChanged) queueStore.saveToFile();
   return true;
 }
 

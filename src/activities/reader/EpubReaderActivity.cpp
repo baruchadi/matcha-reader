@@ -50,8 +50,10 @@
 #include "QrDisplayActivity.h"
 #include "ReaderActivity.h"
 #include "ReaderFontSizes.h"
+#include "ReaderPerformance.h"
 #include "ReaderToolbarUi.h"
 #include "ReaderUtils.h"
+#include "ReadingQueueStore.h"
 #include "ReadingStatsStore.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
@@ -192,6 +194,10 @@ void moveFinishedBookToReadFolder(const std::string& srcPath, const std::string&
   // Keep the book in recents (crossink behavior): repoint the entry to its new
   // location instead of dropping it. updatePath persists on success.
   RECENT_BOOKS.updatePath(srcPath, dstPath, oldCachePath, newCachePath);
+  READING_STATS_STORE.loadFromFile();
+  if (READING_STATS_STORE.updateBookPath(srcPath, dstPath)) READING_STATS_STORE.saveToFile();
+  ReadingQueueStore queueStore;
+  if (queueStore.loadFromFile() && queueStore.queue().updatePath(srcPath, dstPath)) queueStore.saveToFile();
   if (APP_STATE.openEpubPath == srcPath) {
     APP_STATE.openEpubPath = dstPath;
     APP_STATE.saveToFile();
@@ -420,9 +426,9 @@ void EpubReaderActivity::onReaderExit() {
   // Record book completion if exiting at end-of-book (only once per book).
   const bool atEnd = currentSpineIndex > 0 && epub && currentSpineIndex >= epub->getSpineItemsCount();
   if (atEnd) {
-    READING_STATS_STORE.loadFromFile();
-    READING_STATS_STORE.markBookFinished(epub->getPath());
-    READING_STATS_STORE.saveToFile();
+    // ReaderActivity flushes deferred open bookkeeping before this hook. Re-apply the finished
+    // book policy so an immediate exit cannot leave that just-added entry behind.
+    if (SETTINGS.removeReadBooksFromRecents) RECENT_BOOKS.removeByPath(epub->getPath());
   }
 
   // Leaving mid-footnote loses the in-RAM return stack on deep sleep; persist the
@@ -529,11 +535,15 @@ void EpubReaderActivity::openDictionaryWordSelect(const bool pageOnScreen, const
 }
 
 void EpubReaderActivity::readerLoop() {
+  const bool foregroundInputPending =
+      mappedInput.anyButtonDownRaw() || mappedInput.wasAnyPressed() || mappedInput.wasAnyReleased();
+  const bool backgroundWorkAllowed =
+      readerBackgroundWorkAllowed(foregroundInputPending, false, false, RenderLock::peek());
   // Cancel any in-flight background image warm the moment the user touches a button -- BEFORE
   // any handler below can request a render, push a subactivity, or pop this activity (push/pop
   // block on the RenderLock the warm's render() call is still holding; the warm polls this
   // stamp per decode block, so the wait stays in the milliseconds).
-  if (mappedInput.wasAnyPressed()) {
+  if (foregroundInputPending) {
     imageWarmInputStamp_.fetch_add(1, std::memory_order_relaxed);
     pendingHorizontalImageRefine_.store(NO_IMAGE_REFINE, std::memory_order_relaxed);
   }
@@ -569,7 +579,7 @@ void EpubReaderActivity::readerLoop() {
   // and any input above cancels the pending refinement before it can be queued.
   constexpr unsigned long IMAGE_REFINE_IDLE_MS = 150;
   uint32_t pendingRefine = pendingHorizontalImageRefine_.load(std::memory_order_relaxed);
-  if (pendingRefine != NO_IMAGE_REFINE && section && lastRenderCompleteMs != 0 &&
+  if (backgroundWorkAllowed && pendingRefine != NO_IMAGE_REFINE && section && lastRenderCompleteMs != 0 &&
       millis() - lastRenderCompleteMs >= IMAGE_REFINE_IDLE_MS && !RenderLock::peek()) {
     const uint32_t currentKey =
         (static_cast<uint32_t>(currentSpineIndex) << 16) | static_cast<uint16_t>(section->currentPage);
@@ -588,7 +598,7 @@ void EpubReaderActivity::readerLoop() {
   // floor. Cross-chapter prewarm is deliberately out of scope (next spine's
   // section isn't loaded).
   constexpr unsigned long IDLE_PREWARM_DEBOUNCE_MS = 400;
-  if (section && !section->isBuilding() && !RenderLock::peek() && renderer.hasFrameBuffer() &&
+  if (backgroundWorkAllowed && section && !section->isBuilding() && renderer.hasFrameBuffer() &&
       lastRenderCompleteMs != 0 && millis() - lastRenderCompleteMs > IDLE_PREWARM_DEBOUNCE_MS &&
       ESP.getFreeHeap() > RENDER_MIN_FREE_HEAP && ESP.getMaxAllocHeap() > BACKGROUND_BUILD_MIN_MAX_ALLOC &&
       (idlePrewarmSpine != currentSpineIndex || idlePrewarmPage != section->currentPage)) {
@@ -627,7 +637,7 @@ void EpubReaderActivity::readerLoop() {
   // render()); crossing this margin is the signal that the reader will actually need pages
   // past the watermark soon. Uses the last render's viewport so pagination matches the
   // partial being extended.
-  if (section && !section->isBuilding() && section->isPartial() && !RenderLock::peek() && buildViewportWidth > 0 &&
+  if (backgroundWorkAllowed && section && !section->isBuilding() && section->isPartial() && buildViewportWidth > 0 &&
       !partialRebuildStartFailed &&
       section->currentPage + PARTIAL_REBUILD_START_MARGIN >= static_cast<int>(section->pageCount)) {
     RenderLock lock;
@@ -662,7 +672,7 @@ void EpubReaderActivity::readerLoop() {
   // Finishing the chapter is what partials already did ("Keep ticking until it finalizes"), and
   // it stays cheap: two pages per loop tick, only when the render lock is free and the heap gate
   // is open.
-  if (section && section->isBuilding() && !RenderLock::peek() && buildTickHeapGate()) {
+  if (backgroundWorkAllowed && section && section->isBuilding() && buildTickHeapGate()) {
     RenderLock lock;
     // Re-check under the lock: render() (which also holds the RenderLock) may have finalized the
     // build between the outer isBuilding() check and acquiring the lock here, in which case
@@ -1801,7 +1811,9 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn) {
   requestUpdate();
 }
 
-bool EpubReaderActivity::isAtEndOfBook() const { return epub && currentSpineIndex >= epub->getSpineItemsCount(); }
+bool EpubReaderActivity::isAtEndOfBook() const {
+  return epub && epub->getSpineItemsCount() > 0 && currentSpineIndex >= epub->getSpineItemsCount();
+}
 
 void EpubReaderActivity::onReturnFromEndOfBook() {
   currentSpineIndex = std::max(epub->getSpineItemsCount() - 1, 0);
@@ -2343,6 +2355,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // End of the overlap window. Everything past this point may draw: the popups below, the
     // screenshot's framebuffer read, and the image warm's cache decode.
     if (overlapRefresh) renderer.waitRefreshComplete();
+    noteReaderFrameDisplayed();
 
     showPendingSyncSaveError();
 
@@ -2802,6 +2815,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
                    /*glyphsAlreadyWarm=*/prewarmedHPage_ == section->currentPage, grayscaleRefineOnly);
     LOG_DBG("ERS", "Rendered page in %dms", millis() - start);
     lastRenderCompleteMs = millis();
+    noteReaderFrameDisplayed();
   }
   runPostRenderTail(viewportWidth, viewportHeight, /*vertical=*/false, orientedMarginLeft, orientedMarginTop);
 

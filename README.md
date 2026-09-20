@@ -74,8 +74,16 @@ Convert with the [browser tool](https://eszter007.github.io/matcha-reader-tools/
 
 ### Library
 
-Every book on the card as a cover grid, at any depth. Covers and titles come from the book's own metadata on first
-visit, with progress as a badge. Manga sits beside EPUBs. A **Shelves** tab lists folders that contain books.
+Every active book on the card as a cover grid, at any depth. Covers and titles come from the book's own metadata on
+first visit, with progress as a badge. Manga sits beside EPUBs. A **Shelves** tab lists folders that contain books and
+keeps completed titles together as a compact achievement shelf. A **Queue** tab keeps up to 32 books in the exact
+order you plan to read them.
+
+Long-press a cover to add or remove it from the queue, move a queued book earlier or later, mark it completed or
+unfinished, or open its reading stats. Button-device users can set **Short Power Button Click** to **Book Actions** for
+one-click access to the same menu. Completion extends the same reading-history record used when a reader reaches the
+end of a book; it does not reset or duplicate resume progress. Completed books leave the active grid and queue, and
+remain available in **Shelves → Completed**.
 
 <p align="center"><img src="docs/images/screenshots/library.png" width="260" alt="Library grid with manga and EPUB covers side by side"></p>
 
@@ -87,7 +95,8 @@ settings on one screen, starting with the view switch: **Matcha Covers** (the de
 
 Streak, minutes this week, books finished, total time, and a calendar of the days you read. Recorded as you go, every few minutes and again when you close a book, so a flat battery costs you minutes rather than the whole session.
 
-Press **Details** for the same numbers per language, one tab each. Long press a book in the Library for its own sessions, total time, average session and calendar.
+Press **Details** for the same numbers per language, one tab each. Long-press a book in the Library and choose
+**View Reading Stats** for its own sessions, total time, average session and calendar.
 
 <p align="center">
   <img src="docs/images/screenshots/insights.png" width="240" alt="Insights with streak, stat cards and calendar">

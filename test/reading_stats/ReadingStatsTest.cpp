@@ -159,6 +159,37 @@ TEST_F(StatsTest, OverlongHistoryKeepsTheRecentTailAndStaysAligned) {
   EXPECT_EQ(s.getTotalMinutes("ja"), 7u);
 }
 
+TEST_F(StatsTest, CompletionStatusCanBeReopenedWithoutChangingResumeProgress) {
+  auto& s = READING_STATS_STORE;
+  EXPECT_TRUE(s.setBookFinished("/Books/one.epub", true));
+  EXPECT_TRUE(s.isBookFinished("/Books/one.epub"));
+  EXPECT_EQ(s.getBooksFinished(), 1);
+  EXPECT_FALSE(s.setBookFinished("/Books/one.epub", true)) << "marking twice must be idempotent";
+
+  ASSERT_TRUE(s.saveToFile());
+  READING_STATS_STORE = ReadingStatsStore{};
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_TRUE(s.isBookFinished("/Books/one.epub"));
+
+  EXPECT_TRUE(s.setBookFinished("/Books/one.epub", false));
+  EXPECT_FALSE(s.isBookFinished("/Books/one.epub"));
+  EXPECT_EQ(s.getBooksFinished(), 0);
+  EXPECT_FALSE(s.setBookFinished("/Books/one.epub", false));
+}
+
+TEST_F(StatsTest, RenameRepointsCompletionAndPerBookTotals) {
+  auto& s = READING_STATS_STORE;
+  s.setBookFinished("/Old/book.epub", true);
+  s.addBookMinutes("/Old/book.epub", "en", 12, Y, M, 8);
+
+  EXPECT_TRUE(s.updateBookPath("/Old/book.epub", "/New/book.epub"));
+  EXPECT_FALSE(s.isBookFinished("/Old/book.epub"));
+  EXPECT_TRUE(s.isBookFinished("/New/book.epub"));
+  ASSERT_EQ(s.getBooks().size(), 1u);
+  EXPECT_EQ(s.getBooks()[0].path, "/New/book.epub");
+  EXPECT_EQ(s.getBooks()[0].minutesRead, 12u);
+}
+
 TEST_F(StatsTest, BookHistoryLongerThanTheCapKeepsTheNewest) {
   const char* path = "/Japanese/long.epub";
   BookStats b;

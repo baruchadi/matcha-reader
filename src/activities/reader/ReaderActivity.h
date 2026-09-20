@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 
+#include "DeferredReaderOpenBookkeeping.h"
 #include "EndOfBookOptions.h"
 #include "activities/Activity.h"
 
@@ -25,6 +26,9 @@ class ReaderActivity : public Activity {
   virtual std::string getBookAuthor() const { return ""; }
   virtual std::string getBookThumbBmpPath() const { return ""; }
   virtual const char* getBookLanguage() const { return nullptr; }
+  // EPUB resolves per-book font preferences in onReaderEnter(); loading the global font first
+  // duplicates SD/font-cache work when the saved book preference differs.
+  virtual bool prepareFontBeforeLoad() const { return true; }
   virtual void onReaderEnter() = 0;
   virtual void onReaderExit() = 0;
   virtual void readerLoop() = 0;
@@ -39,6 +43,7 @@ class ReaderActivity : public Activity {
   bool handleEndOfBookMenu(bool suppressConfirmRelease = false);
   bool handleEndOfBookPageTurn(bool prevTriggered, bool nextTriggered);
   bool renderEndOfBook(const char* logTag);
+  void noteReaderFrameDisplayed();
   void disableFastInitialRefresh() { pagesUntilFullRefresh = 0; }
 
  public:
@@ -55,5 +60,8 @@ class ReaderActivity : public Activity {
   bool handleForcedRefresh() final;
 
  private:
+  void persistOpenBookkeeping();
+
   unsigned long readingSessionStartMs = 0;
+  DeferredReaderOpenBookkeeping openBookkeeping;
 };

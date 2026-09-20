@@ -132,7 +132,9 @@ void XtcReaderActivity::readerLoop() {
   }
 }
 
-bool XtcReaderActivity::isAtEndOfBook() const { return xtc && currentPage >= xtc->getPageCount(); }
+bool XtcReaderActivity::isAtEndOfBook() const {
+  return xtc && xtc->getPageCount() > 0 && currentPage >= xtc->getPageCount();
+}
 
 void XtcReaderActivity::onReturnFromEndOfBook() { currentPage = xtc->getPageCount() > 0 ? xtc->getPageCount() - 1 : 0; }
 
@@ -150,6 +152,7 @@ void XtcReaderActivity::render(RenderLock&&) {
   updateBookmarkFlag();
   renderPage();
   saveProgress();
+  noteReaderFrameDisplayed();
 
   if (pendingScreenshot) {
     pendingScreenshot = false;

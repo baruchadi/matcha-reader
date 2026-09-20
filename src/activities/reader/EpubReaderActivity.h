@@ -352,7 +352,7 @@ class EpubReaderActivity final : public ReaderActivity {
   // being shown) and per loop() tick (background build of a large chapter). Kept small so a
   // background build chunk never noticeably delays input or a pending render.
   static constexpr int BUILD_PAGES_PER_CHUNK = 8;
-  static constexpr int BACKGROUND_BUILD_PAGES_PER_TICK = 2;
+  static constexpr int BACKGROUND_BUILD_PAGES_PER_TICK = 1;
   // Wall-clock cap on one background build tick. The tick runs on the loop task, so this is
   // also the delay it can add to handling a button press. Pages are not uniform (median ~23ms,
   // p90 ~79ms measured on device), so the page count alone does not bound it.
@@ -577,6 +577,7 @@ class EpubReaderActivity final : public ReaderActivity {
   std::string getBookAuthor() const override { return epub ? epub->getAuthor() : ""; }
   std::string getBookThumbBmpPath() const override { return epub ? epub->getThumbBmpPath() : ""; }
   const char* getBookLanguage() const override { return epub ? epub->getLanguage().c_str() : nullptr; }
+  bool prepareFontBeforeLoad() const override { return false; }
   void onReaderEnter() override;
   void onReaderExit() override;
   void readerLoop() override;

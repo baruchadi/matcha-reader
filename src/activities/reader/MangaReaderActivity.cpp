@@ -31,6 +31,7 @@
 #include "ProgressFile.h"
 #include "QrDisplayActivity.h"
 #include "ReaderUtils.h"
+#include "ReadingQueueStore.h"
 #include "ReadingStatsStore.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
@@ -199,8 +200,9 @@ void MangaReaderActivity::onExit() {
   const bool atLastPage = book && book->getPageCount() > 0 && currentPage >= book->getPageCount() - 1;
   if (atLastPage) {
     READING_STATS_STORE.loadFromFile();
-    READING_STATS_STORE.markBookFinished(book->getFolder());
-    READING_STATS_STORE.saveToFile();
+    if (READING_STATS_STORE.setBookFinished(book->getFolder(), true)) READING_STATS_STORE.saveToFile();
+    ReadingQueueStore queueStore;
+    if (queueStore.loadFromFile() && queueStore.queue().remove(book->getFolder())) queueStore.saveToFile();
   }
 
   saveProgress();

@@ -353,6 +353,7 @@ void TxtReaderActivity::render(RenderLock&&) {
 
   // Save progress
   saveProgress();
+  noteReaderFrameDisplayed();
 }
 
 void TxtReaderActivity::renderPage() {

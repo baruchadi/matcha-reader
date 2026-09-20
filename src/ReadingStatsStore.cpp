@@ -302,15 +302,51 @@ uint16_t ReadingStatsStore::getBooksFinished(const char* language) const {
   return count;
 }
 
-void ReadingStatsStore::markBookFinished(const std::string& bookPath) {
-  if (std::any_of(finishedBookPaths.begin(), finishedBookPaths.end(),
-                  [&bookPath](const std::string& p) { return p == bookPath; })) {
-    return;
+void ReadingStatsStore::markBookFinished(const std::string& bookPath) { setBookFinished(bookPath, true); }
+
+bool ReadingStatsStore::isBookFinished(const std::string& bookPath) const {
+  return std::find(finishedBookPaths.begin(), finishedBookPaths.end(), bookPath) != finishedBookPaths.end();
+}
+
+bool ReadingStatsStore::setBookFinished(const std::string& bookPath, const bool finished) {
+  if (bookPath.empty()) return false;
+  const auto it = std::find(finishedBookPaths.begin(), finishedBookPaths.end(), bookPath);
+  if (finished) {
+    if (it != finishedBookPaths.end() || finishedBookPaths.size() >= 500) return false;
+    finishedBookPaths.push_back(bookPath);
+  } else {
+    if (it == finishedBookPaths.end()) return false;
+    finishedBookPaths.erase(it);
   }
-  finishedBookPaths.push_back(bookPath);
-  // max(), not assignment: after a truncated load the path list can hold fewer entries than the
-  // count the file's header reported, and a finished-book tally must never count down.
-  booksFinished = std::max(booksFinished, static_cast<uint16_t>(finishedBookPaths.size()));
+  // Once the path block is intact (the normal case), this is the current Completed collection.
+  // loadFromFile() already derives the same count from this list. Manual "unfinished" must be
+  // allowed to count down rather than preserving a lifetime high-water mark.
+  booksFinished = static_cast<uint16_t>(finishedBookPaths.size());
+  return true;
+}
+
+bool ReadingStatsStore::updateBookPath(const std::string& oldPath, const std::string& newPath) {
+  if (oldPath.empty() || newPath.empty() || oldPath == newPath) return false;
+  bool changed = false;
+
+  const auto oldFinished = std::find(finishedBookPaths.begin(), finishedBookPaths.end(), oldPath);
+  if (oldFinished != finishedBookPaths.end()) {
+    const auto newFinished = std::find(finishedBookPaths.begin(), finishedBookPaths.end(), newPath);
+    if (newFinished == finishedBookPaths.end()) {
+      *oldFinished = newPath;
+    } else {
+      finishedBookPaths.erase(oldFinished);
+    }
+    changed = true;
+  }
+
+  for (auto& book : books) {
+    if (book.path != oldPath) continue;
+    book.path = newPath;
+    changed = true;
+  }
+  if (changed) booksFinished = static_cast<uint16_t>(finishedBookPaths.size());
+  return changed;
 }
 
 uint16_t ReadingStatsStore::getMinutesForDay(uint16_t year, uint8_t month, uint8_t day) const {

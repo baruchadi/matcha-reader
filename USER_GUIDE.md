@@ -146,8 +146,21 @@ The Browse Files screen acts as a file and folder browser. The full path to the 
 ### 3.4 Library Screen
 
 Matcha ships two Library screens and **Settings → Display → Library → Library View** chooses between them. **Matcha Covers**, the
-default, is a grid of book covers described in the README. **CrossPoint List** is the indexed list documented below.
-Everything in this section applies to the list view.
+default, has three tabs:
+
+- **Books** shows active books. Completed books are removed from this grid without deleting or moving their files.
+- **Shelves** lists physical book folders and adds **Completed**, a virtual achievement shelf for finished books.
+- **Queue** shows up to 32 books in the exact order you intend to read them.
+
+Tap or press **Confirm** to open a book. Long-press a cover to open its actions; on button devices you can instead set
+**Short Power Button Click** to **Book Actions** for one-click access. Actions include viewing reading stats, adding or
+removing the book from the queue, marking it completed or unfinished, and moving a queued book one position earlier
+or later. Marking a book completed uses the same completion record that is updated when you reach the end of a book.
+It does not reset your saved page. Completed books automatically leave the queue; marking one unfinished returns it
+to **Books**.
+
+**CrossPoint List** is the indexed list documented below. Everything after this paragraph in this section applies to
+the list view.
 
 The Library indexes up to 4,096 supported books on the SD card and shows their titles and authors without requiring you to remember their folders. Its four tabs provide different views. An arrow beside an indexed tab shows the sort direction:
 
@@ -422,6 +435,7 @@ open a list when selected.
   - "Refresh" - A short press triggers a manual full-screen refresh, useful for clearing ghosting
   - "Word Lookup" - A short press in reading mode opens word selection. A second press looks up the highlighted word, and a press in the definition view closes the dictionary and returns to the page — two presses in, one press out, without moving your reading hand.
   - "Confirm" - A short press acts as the Confirm button. It earns its place on touch devices, which have no front Confirm key.
+  - "Book Actions" - A short press opens the action menu for the focused book in the Matcha Covers Library. Holding Power still puts the device to sleep.
 
 - **Touch Reader Controls**: How the touchscreen turns pages while reading (touch devices only):
   
@@ -1062,8 +1076,8 @@ language at all, which means TXT, XTC and manga converted without `--language`, 
 
 ### 7.3 Per-book Stats
 
-Long press a book in the Library. Sessions, total time, average session, days read, and a calendar of the days you
-read that book.
+Long-press a book in the Matcha Covers Library and choose **View Reading Stats**. Sessions, total time, average
+session, days read, and a calendar of the days you read that book.
 
 A session is one opening of the book. Opening the reader menu or settings partway through does not start another
 one. Waking the device back into a book does count as a new session, so an evening broken up by sleep shows as

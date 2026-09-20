@@ -55,6 +55,10 @@ class RecentBooksStore : public PersistableStore<RecentBooksStore> {
   // Returns true if any entry was removed. Does not persist — caller decides.
   bool pruneMissing();
 
+  // Remove recents absent from an already-completed in-memory card scan. This keeps the
+  // Library's tap-to-first-frame path free of one Storage.exists() call per recent entry.
+  bool retainBooksPresentIn(const std::vector<RecentBook>& catalog);
+
   // Get the list of recent books (most recent first)
   const std::vector<RecentBook>& getBooks() const { return recentBooks; }
   std::vector<RecentBook> takeBooks() { return std::move(recentBooks); }

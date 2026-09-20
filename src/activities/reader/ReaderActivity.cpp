@@ -10,7 +10,10 @@
 #include "CrossPointState.h"
 #include "EpubReaderActivity.h"
 #include "MangaReaderActivity.h"
+#include "ReaderPerformance.h"
 #include "ReaderUtils.h"
+#include "ReadingQueueStore.h"
+#include "ReadingStatsStore.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "TxtReaderActivity.h"
@@ -54,7 +57,7 @@ void ReaderActivity::onEnter() {
     finish();
     return;
   }
-  sdFontSystem.ensureLoaded(renderer);
+  if (prepareFontBeforeLoad()) sdFontSystem.ensureLoaded(renderer);
   if (!loadBook()) {
     finish();
     return;
@@ -64,15 +67,22 @@ void ReaderActivity::onEnter() {
   onReaderEnter();
   APP_STATE.openEpubPath = bookPath;
   APP_STATE.saveToFile();
-  RECENT_BOOKS.addBook(bookPath, getBookTitle(), getBookAuthor(), getBookThumbBmpPath());
-  BookStats::recordOpen(bookPath.c_str());
+  openBookkeeping.arm();
   requestUpdate();
 }
 
 void ReaderActivity::onExit() {
   Activity::onExit();
+  const bool completed = isAtEndOfBook();
+  openBookkeeping.runNowIfPending([this] { persistOpenBookkeeping(); });
   ReaderUtils::flushReadingStats(readingSessionStartMs, true, hasBook() ? bookPath.c_str() : nullptr,
                                  hasBook() ? getBookLanguage() : nullptr);
+  if (completed) {
+    READING_STATS_STORE.loadFromFile();
+    if (READING_STATS_STORE.setBookFinished(bookPath, true)) READING_STATS_STORE.saveToFile();
+    ReadingQueueStore queueStore;
+    if (queueStore.loadFromFile() && queueStore.queue().remove(bookPath)) queueStore.saveToFile();
+  }
   onReaderExit();
 
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
@@ -88,7 +98,28 @@ void ReaderActivity::loop() {
     return;
   }
   ReaderUtils::flushReadingStats(readingSessionStartMs, false, bookPath.c_str(), getBookLanguage());
+  const auto foregroundWorkPending = [this] {
+    return !readerBackgroundWorkAllowed(mappedInput.anyButtonDownRaw(), mappedInput.wasAnyPressed(),
+                                        mappedInput.wasAnyReleased(), RenderLock::peek());
+  };
+  // End-of-book cleanup must observe the newly persisted recents entry before deciding whether
+  // a finished book should be removed. Everywhere else, foreground input processing comes first.
+  if (isAtEndOfBook()) {
+    openBookkeeping.runIfReadyWhenIdle(millis(), foregroundWorkPending(), [this] { persistOpenBookkeeping(); });
+  }
   readerLoop();
+  if (!isAtEndOfBook()) {
+    // readerLoop() may have queued a page render, so sample the foreground state again before
+    // starting SD writes rather than relying on the state from the beginning of the tick.
+    openBookkeeping.runIfReadyWhenIdle(millis(), foregroundWorkPending(), [this] { persistOpenBookkeeping(); });
+  }
+}
+
+void ReaderActivity::noteReaderFrameDisplayed() { openBookkeeping.noteRenderResult(true, millis()); }
+
+void ReaderActivity::persistOpenBookkeeping() {
+  RECENT_BOOKS.addBook(bookPath, getBookTitle(), getBookAuthor(), getBookThumbBmpPath());
+  BookStats::recordOpen(bookPath.c_str());
 }
 
 void ReaderActivity::clearEndOfBookOptionsIfNeeded() {
