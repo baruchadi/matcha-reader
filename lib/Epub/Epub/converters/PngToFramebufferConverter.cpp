@@ -93,12 +93,24 @@ int32_t pngSeekWithHandle(PNGFILE* pFile, int32_t pos) {
   return f->seek(pos);
 }
 
-// The PNG decoder (PNGdec) is ~42 KB due to internal zlib decompression buffers.
-// We heap-allocate it on demand rather than using a static instance, so this memory
-// is only consumed while actually decoding/querying PNG images. This is critical on
-// the ESP32-C3 where total RAM is ~320 KB.
-constexpr size_t PNG_DECODER_APPROX_SIZE = 44 * 1024;                          // ~42 KB + overhead
+// The PNG decoder (PNGdec) is one big object: a 32 KB zlib window plus the inflate state, the
+// palette, and a scanline buffer sized by PNG_MAX_BUFFERED_PIXELS (16416 here, far above the
+// library default). We heap-allocate it on demand rather than keeping a static instance, so the
+// memory is only spent while decoding. Taken from the type, not a hand-written number: a
+// hardcoded "~42 KB" went stale the moment the build flag grew the buffer, and the checks below
+// then waved through allocations that could not fit.
+constexpr size_t PNG_DECODER_APPROX_SIZE = sizeof(PNG);
 constexpr size_t MIN_FREE_HEAP_FOR_PNG = PNG_DECODER_APPROX_SIZE + 16 * 1024;  // decoder + 16 KB headroom
+
+// The decoder is a single allocation, so the largest free block is what decides, not the total.
+// A fragmented heap can show 100 KB free and still have no room for it.
+bool pngDecoderFits() {
+  const size_t largest = ESP.getMaxAllocHeap();
+  if (largest >= PNG_DECODER_APPROX_SIZE && ESP.getFreeHeap() >= MIN_FREE_HEAP_FOR_PNG) return true;
+  LOG_ERR("PNG", "No room for the %u-byte decoder (free=%u largest=%u)", static_cast<unsigned>(PNG_DECODER_APPROX_SIZE),
+          static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(largest));
+  return false;
+}
 
 // PNGdec keeps TWO scanlines in its internal ucPixels buffer (current + previous)
 // and each scanline includes a leading filter byte.
@@ -344,15 +356,14 @@ int pngDrawCallback(PNGDRAW* pDraw) {
 }  // namespace
 
 bool PngToFramebufferConverter::getDimensionsStatic(const std::string& imagePath, ImageDimensions& out) {
-  size_t freeHeap = ESP.getFreeHeap();
-  if (freeHeap < MIN_FREE_HEAP_FOR_PNG) {
-    LOG_ERR("PNG", "Not enough heap for PNG decoder (%u free, need %u)", freeHeap, MIN_FREE_HEAP_FOR_PNG);
-    return false;
-  }
+  if (!pngDecoderFits()) return false;
 
   std::unique_ptr<PNG> png(new (std::nothrow) PNG());
   if (!png) {
-    LOG_ERR("PNG", "Failed to allocate PNG decoder for dimensions");
+    // The decoder is one ~42 KB object: free heap can be ample while no single block fits, so
+    // the largest block is the number that explains this failure.
+    LOG_ERR("PNG", "Failed to allocate PNG decoder for dimensions (free=%u largest=%u)",
+            static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
     return false;
   }
 
@@ -372,13 +383,9 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
                                                     const RenderConfig& config) {
   LOG_DBG("PNG", "Decoding PNG: %s", imagePath.c_str());
 
-  size_t freeHeap = ESP.getFreeHeap();
-  if (freeHeap < MIN_FREE_HEAP_FOR_PNG) {
-    LOG_ERR("PNG", "Not enough heap for PNG decoder (%u free, need %u)", freeHeap, MIN_FREE_HEAP_FOR_PNG);
-    return false;
-  }
+  if (!pngDecoderFits()) return false;
 
-  // Heap-allocate PNG decoder (~42 KB) - freed at end of function
+  // Heap-allocate the PNG decoder - freed at end of function
   std::unique_ptr<PNG> png(new (std::nothrow) PNG());
   if (!png) {
     LOG_ERR("PNG", "Failed to allocate PNG decoder");
