@@ -1,6 +1,7 @@
 #include "SleepActivity.h"
 
 #include <BitmapHelpers.h>
+#include <DictIndex.h>
 #include <Epub.h>
 #include <Epub/converters/PngToFramebufferConverter.h>
 #include <FontCacheManager.h>
@@ -27,6 +28,7 @@
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "GrayLogo.h"
+#include "SdCardFontSystem.h"
 #include "activities/reader/ReaderUtils.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -495,12 +497,14 @@ bool drawSleepPopupPreservingFrame(GfxRenderer& renderer) {
 
 void releaseSdFontCachesForDecode(const GfxRenderer& renderer) {
   if (auto* fcm = renderer.getFontCacheManager()) {
-    LOG_DBG("SLP", "Free heap before SD font cache release: %d bytes", ESP.getFreeHeap());
+    LOG_DBG("SLP", "Before SD font cache release: free=%u largest=%u", static_cast<unsigned>(ESP.getFreeHeap()),
+            static_cast<unsigned>(ESP.getMaxAllocHeap()));
     // releaseSdFontCaches() was renamed/widened to releaseAllFontMemory() during the fork's
     // font-cache work: same SD-cache release this call wants, plus the persistent advance
     // tables and FontDecompressor glyph slab, which only helps an image-decode heap squeeze.
     fcm->releaseAllFontMemory();
-    LOG_DBG("SLP", "Free heap before sleep image decode: %d bytes", ESP.getFreeHeap());
+    LOG_DBG("SLP", "Before sleep image decode: free=%u largest=%u", static_cast<unsigned>(ESP.getFreeHeap()),
+            static_cast<unsigned>(ESP.getMaxAllocHeap()));
   }
 }
 
@@ -728,9 +732,17 @@ bool SleepActivity::renderSleepOverlayFile(HalFile& file, const char* pathForLog
 }
 
 bool SleepActivity::renderTransparentOverlayPng(const std::string& path) const {
-  // Reader fonts are unrelated to the retained framebuffer and reload after wake; releasing
-  // them gives the PNG decoder the roughly 60 KB it needs.
+  // The decoder is a single ~60 KB object, and sleeping from inside a book left the largest free
+  // block at ~55 KB: plenty free, no room for it, so the overlay was skipped and the plain screen
+  // drawn instead. Everything released here is rebuildable and the RAM is lost to deep sleep
+  // anyway, so nothing is paid for it -- the device reboots on wake and reloads what it needs.
+  LOG_DBG("SLP", "Overlay PNG, before release: free=%u largest=%u", static_cast<unsigned>(ESP.getFreeHeap()),
+          static_cast<unsigned>(ESP.getMaxAllocHeap()));
   if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseAllFontMemory();
+  sdFontSystem.releaseAllResidentFonts(renderer);
+  DictIndex::releaseCaches();
+  LOG_DBG("SLP", "Overlay PNG, after release: free=%u largest=%u", static_cast<unsigned>(ESP.getFreeHeap()),
+          static_cast<unsigned>(ESP.getMaxAllocHeap()));
 
   ImageDimensions dims{};
   if (!PngToFramebufferConverter::getDimensionsStatic(path, dims)) return false;
