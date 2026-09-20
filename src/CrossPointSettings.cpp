@@ -195,7 +195,9 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   // so a device that has already been through the new screen is never overwritten. Prev/Next was
   // the default and needs nothing; Next/Prev becomes an explicit swap, Disabled becomes Off on
   // both buttons. Dropping the key without this silently reset every non-default side layout.
-  if (boardHasCustomSideButtons() && doc["upperSideButtonAction"].isNull() && doc["lowerSideButtonAction"].isNull() &&
+  // Board-independent, like the rows themselves: a card carrying the legacy key reads the same
+  // on whichever device it is put into.
+  if (doc["upperSideButtonAction"].isNull() && doc["lowerSideButtonAction"].isNull() &&
       !doc["sideButtonLayout"].isNull()) {
     switch (doc["sideButtonLayout"] | (uint8_t)LEGACY_PREV_NEXT) {
       case LEGACY_NEXT_PREV:

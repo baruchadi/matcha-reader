@@ -222,17 +222,9 @@ inline std::vector<StrId> buildLongPressMenuValues() {
 // from the active family rather than a fixed enum.
 // categoryFilter/includeTextSettingsEntries let embedded device screens copy only
 // entries they can display while the reader keeps its memory-heavy state alive.
-// The per-button side actions exist only on the C3 X3/X4 boards (plain X4,
-// X3, X3 UC8279 run), whose two side keys are a fixed physical pair.
-inline bool boardHasCustomSideButtons() {
-  const auto board = BoardConfig::ACTIVE.board;
-  return board == BoardConfig::Board::XteinkX4 || board == BoardConfig::Board::XteinkX3 ||
-         board == BoardConfig::Board::XteinkX3Uc8279;
-}
 
-// The single test for "this row is a per-button side action". Both the menu builders and the
-// persistence walk go through it -- the two must agree on exactly which keys exist on a board,
-// or settingHiddenByBoard() would stop a key from ever being written.
+// The single test for "this row is a per-button side action". Kept for the persistence walk and
+// any caller that needs to name the pair.
 inline bool isSideButtonActionRow(const StrId nameId) {
   return nameId == StrId::STR_UPPER_SIDE_BUTTON || nameId == StrId::STR_LOWER_SIDE_BUTTON;
 }
@@ -406,9 +398,10 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
                           StrId::STR_CAT_SHORTCUTS),
         SettingInfo::Toggle(StrId::STR_PWR_BTN_FOOTNOTE_BACK, &CrossPointSettings::pwrBtnFootnoteBack,
                             "pwrBtnFootnoteBack", StrId::STR_CAT_SHORTCUTS),
-        // X3/X4 only, last in the Shortcuts sub-screen: fixed physical mapping
-        // (Upper = BTN_UP, Lower = BTN_DOWN). Erased below on other boards; the
-        // option order matches SIDE_BUTTON_ACTION.
+        // Last in the Shortcuts sub-screen: fixed physical mapping (Upper = BTN_UP,
+        // Lower = BTN_DOWN). Every board profile defines that pair and sideActionFired() reads
+        // those two keys directly, so the rows are offered everywhere -- they were X3/X4 only for
+        // no reason the input path shares. The option order matches SIDE_BUTTON_ACTION.
         SettingInfo::Enum(
             StrId::STR_UPPER_SIDE_BUTTON, &CrossPointSettings::upperSideButtonAction,
             {StrId::STR_DEFAULT_VALUE, StrId::STR_SLEEP, StrId::STR_PREVIOUS_PAGE, StrId::STR_NEXT_PAGE_OPT,
@@ -561,11 +554,6 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
     const auto eraseEntry = [&v](const StrId nameId) {
       v.erase(std::find_if(v.begin(), v.end(), [nameId](const SettingInfo& s) { return s.nameId == nameId; }));
     };
-    // Per-button side actions only exist on the C3 X3/X4 boards.
-    if (!boardHasCustomSideButtons()) {
-      eraseEntry(StrId::STR_UPPER_SIDE_BUTTON);
-      eraseEntry(StrId::STR_LOWER_SIDE_BUTTON);
-    }
     // Double-click power frontlight shortcut only exists on the X4 Pro.
     if (!BoardConfig::isX4Pro()) eraseEntry(StrId::STR_DBL_CLICK_PWR_LIGHT);
     // Tilt page turn needs the QMI8658 IMU (X3).
@@ -579,7 +567,6 @@ inline const std::vector<SettingInfo>& settingsBaseList() {
 // persistence walk applies exactly the same set -- a divergence here would change WHICH keys get
 // written to the settings file on a given board.
 inline bool settingHiddenByBoard(const SettingInfo& s) {
-  if (!boardHasCustomSideButtons() && isSideButtonActionRow(s.nameId)) return true;
   if (!BoardConfig::hasTouch() &&
       (s.nameId == StrId::STR_TOUCH_READER_CONTROLS || s.nameId == StrId::STR_READER_MENU_STYLE)) {
     return true;
