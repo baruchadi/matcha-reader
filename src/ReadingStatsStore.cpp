@@ -2,6 +2,7 @@
 
 #include <HalStorage.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <SdSystemDir.h>
 
 #include <algorithm>
@@ -419,13 +420,17 @@ bool ReadingStatsStore::readFinishedCountFromFile(uint16_t& outCount) {
 }
 
 bool ReadingStatsStore::readFinishedPreviewFromFile(std::vector<FinishedBookPreview>& out, const size_t maxBooks,
-                                                    uint16_t& outTotal, uint16_t& outRatedCount,
-                                                    uint32_t& outRatingSum) {
+                                                    uint16_t& outTotal, uint16_t& outRatedCount, uint32_t& outRatingSum,
+                                                    const std::vector<std::string>* membershipCandidates,
+                                                    std::vector<uint8_t>* outMembership) {
   out.clear();
   outTotal = 0;
   outRatedCount = 0;
   outRatingSum = 0;
   out.reserve(std::min<size_t>(maxBooks, 500));
+  if (outMembership) {
+    outMembership->assign(membershipCandidates ? membershipCandidates->size() : 0, 0);
+  }
 
   HalFile f;
   if (!Storage.openFileForRead("STAT", statsPath().c_str(), f)) return false;
@@ -441,32 +446,62 @@ bool ReadingStatsStore::readFinishedPreviewFromFile(std::vector<FinishedBookPrev
 
   uint16_t pathCount = 0;
   if (f.read(reinterpret_cast<uint8_t*>(&pathCount), 2) != 2 || pathCount > 500) return false;
+  // Paths may be 500 bytes, above the firmware's per-function stack budget. One bounded nothrow
+  // allocation per Hub load is safer than a 501-byte stack frame and is reused for every record.
+  auto pathBuffer = makeUniqueNoThrow<char[]>(501);
+  if (!pathBuffer) return false;
   for (uint16_t index = 0; index < pathCount; index++) {
     uint16_t pathLength = 0;
     if (f.read(reinterpret_cast<uint8_t*>(&pathLength), 2) != 2 || pathLength > 500) return false;
     const bool keep = maxBooks > 0 && index + maxBooks >= pathCount;
-    if (keep) {
-      FinishedBookPreview preview;
-      preview.path.assign(pathLength, '\0');
-      if (pathLength > 0 && f.read(reinterpret_cast<uint8_t*>(&preview.path[0]), pathLength) != pathLength) {
+    const bool inspectMembership = membershipCandidates && outMembership && !membershipCandidates->empty();
+    if (keep || inspectMembership) {
+      if (pathLength > 0 && f.read(reinterpret_cast<uint8_t*>(pathBuffer.get()), pathLength) != pathLength) {
         return false;
       }
+      pathBuffer[pathLength] = '\0';
+      if (inspectMembership) {
+        for (size_t candidate = 0; candidate < membershipCandidates->size(); candidate++) {
+          const auto& value = (*membershipCandidates)[candidate];
+          if (value.size() == pathLength && memcmp(value.data(), pathBuffer.get(), pathLength) == 0) {
+            (*outMembership)[candidate] = 1;
+          }
+        }
+      }
+    }
+    if (keep) {
+      FinishedBookPreview preview;
+      preview.path.assign(pathBuffer.get(), pathLength);
       out.push_back(std::move(preview));
-    } else if (!skipBytes(f, pathLength)) {
+    } else if (!inspectMembership && !skipBytes(f, pathLength)) {
       return false;
     }
   }
 
+  // The path block is the authoritative completion record. Optional blocks written after it can
+  // be interrupted by power loss; preserve the valid paths as unrated instead of making every
+  // completion disappear from Home. This mirrors loadFromFile()'s fail-soft policy.
+  const auto finishWithoutRatings = [&]() {
+    outRatedCount = 0;
+    outRatingSum = 0;
+    for (auto& preview : out) preview.rating = 0;
+    std::reverse(out.begin(), out.end());
+    outTotal = pathCount;
+    return true;
+  };
+
   if (version >= 3) {
     uint16_t bookCount = 0;
-    if (f.read(reinterpret_cast<uint8_t*>(&bookCount), 2) != 2 || bookCount > MAX_BOOKS) return false;
+    if (f.read(reinterpret_cast<uint8_t*>(&bookCount), 2) != 2 || bookCount > MAX_BOOKS) {
+      return finishWithoutRatings();
+    }
     for (uint16_t index = 0; index < bookCount; index++) {
       uint16_t pathLength = 0;
       uint8_t languageLength = 0;
       if (f.read(reinterpret_cast<uint8_t*>(&pathLength), 2) != 2 || pathLength > 500 || !skipBytes(f, pathLength) ||
           f.read(&languageLength, 1) != 1 || languageLength > MAX_STORED_LANGUAGE ||
           !skipBytes(f, static_cast<size_t>(languageLength) + 8)) {
-        return false;
+        return finishWithoutRatings();
       }
     }
   }
@@ -475,17 +510,19 @@ bool ReadingStatsStore::readFinishedPreviewFromFile(std::vector<FinishedBookPrev
     uint16_t languageDayCount = 0;
     if (f.read(reinterpret_cast<uint8_t*>(&languageDayCount), 2) != 2 ||
         !skipBytes(f, static_cast<size_t>(languageDayCount) * 10)) {
-      return false;
+      return finishWithoutRatings();
     }
   }
 
   if (version >= 5) {
     uint16_t ratingCount = 0;
-    if (f.read(reinterpret_cast<uint8_t*>(&ratingCount), 2) != 2 || ratingCount != pathCount) return false;
+    if (f.read(reinterpret_cast<uint8_t*>(&ratingCount), 2) != 2 || ratingCount != pathCount) {
+      return finishWithoutRatings();
+    }
     const size_t retainedStart = pathCount - out.size();
     for (uint16_t index = 0; index < ratingCount; index++) {
       uint8_t rating = 0;
-      if (f.read(&rating, 1) != 1 || rating > 5) return false;
+      if (f.read(&rating, 1) != 1 || rating > 5) return finishWithoutRatings();
       if (rating > 0) {
         outRatedCount++;
         outRatingSum += rating;

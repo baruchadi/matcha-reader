@@ -157,14 +157,23 @@ enum UIIcon {
 
 enum class RootExperience : uint8_t { LEGACY_HOME = 0, READING_HUB = 1 };
 
+struct ReadingHubShelf {
+  std::string path;
+  std::string name;
+  std::string coverBmpPath;
+  uint16_t bookCount = 0;
+  bool completed = false;
+};
+
 struct ReadingHubScreen {
   uint8_t section = 0;
   int selectedIndex = 0;
   const RecentBook* currentBook = nullptr;
   int currentProgress = -1;
   const RecentBook* nextBook = nullptr;
-  const RecentBook* libraryBooks = nullptr;
-  int libraryPreviewCount = 0;
+  const ReadingHubShelf* shelves = nullptr;
+  int shelfPreviewCount = 0;
+  int shelfTotalCount = 0;
   int libraryTotalCount = 0;
   const RecentBook* queueBooks = nullptr;
   int queuePreviewCount = 0;

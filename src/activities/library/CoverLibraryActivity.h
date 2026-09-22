@@ -10,6 +10,7 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "LibraryPerformance.h"
@@ -49,6 +50,8 @@ class CoverLibraryActivity final : public Activity {
   std::vector<uint16_t> queueBookIndices;
   ReadingQueueStore readingQueueStore;
   const InitialView initialView;
+  const std::string initialShelfPath;
+  const bool initialShelfCompleted;
 
   struct BookProgress {
     int percent = -1;
@@ -335,12 +338,15 @@ class CoverLibraryActivity final : public Activity {
 
  public:
   explicit CoverLibraryActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                InitialView initialViewValue = InitialView::ACTIVE)
+                                InitialView initialViewValue = InitialView::ACTIVE,
+                                std::string initialShelfPathValue = {}, bool initialShelfCompletedValue = false)
       : Activity(initialViewValue == InitialView::QUEUE       ? "ReadingQueue"
                  : initialViewValue == InitialView::COMPLETED ? "CompletedLibrary"
                                                               : "Library",
                  renderer, mappedInput),
-        initialView(initialViewValue) {}
+        initialView(initialViewValue),
+        initialShelfPath(std::move(initialShelfPathValue)),
+        initialShelfCompleted(initialShelfCompletedValue) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

@@ -135,9 +135,13 @@ class ReadingStatsStore {
   static bool readFinishedCountFromFile(uint16_t& outCount);
   // Reading Hub needs a bounded cover preview, not the full multi-year stats store. This walks
   // the persisted format and retains only the newest `maxBooks` completion paths while also
-  // deriving rating totals for the summary strip.
+  // deriving rating totals for the summary strip. Optional membership candidates let Home filter
+  // its tiny recent-book set against the COMPLETE finished-path block without retaining that block
+  // in memory; outMembership is resized to the candidate count and filled with 0/1 bytes.
   static bool readFinishedPreviewFromFile(std::vector<FinishedBookPreview>& out, size_t maxBooks, uint16_t& outTotal,
-                                          uint16_t& outRatedCount, uint32_t& outRatingSum);
+                                          uint16_t& outRatedCount, uint32_t& outRatingSum,
+                                          const std::vector<std::string>* membershipCandidates = nullptr,
+                                          std::vector<uint8_t>* outMembership = nullptr);
 
   uint16_t getMinutesForDay(uint16_t year, uint8_t month, uint8_t day) const;
   uint16_t getMinutesThisWeek(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const;

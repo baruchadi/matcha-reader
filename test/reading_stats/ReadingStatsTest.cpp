@@ -219,6 +219,49 @@ TEST_F(StatsTest, FinishedPreviewKeepsNewestBooksWithoutLoadingFullHistory) {
   EXPECT_EQ(preview.back().rating, 2);
 }
 
+TEST_F(StatsTest, FinishedPreviewMatchesAllCandidatesNotOnlyVisibleTail) {
+  auto& s = READING_STATS_STORE;
+  for (int i = 0; i < 8; i++) ASSERT_TRUE(s.setBookFinished("/Books/book-" + std::to_string(i) + ".epub", true));
+  ASSERT_TRUE(s.saveToFile());
+
+  const std::vector<std::string> candidates = {"/Books/book-0.epub", "/Books/not-finished.epub", "/Books/book-7.epub"};
+  std::vector<uint8_t> membership;
+  std::vector<FinishedBookPreview> preview;
+  uint16_t total = 0;
+  uint16_t rated = 0;
+  uint32_t ratingSum = 0;
+  ASSERT_TRUE(
+      ReadingStatsStore::readFinishedPreviewFromFile(preview, 2, total, rated, ratingSum, &candidates, &membership));
+  ASSERT_EQ(membership.size(), candidates.size());
+  EXPECT_EQ(membership[0], 1);
+  EXPECT_EQ(membership[1], 0);
+  EXPECT_EQ(membership[2], 1);
+}
+
+TEST_F(StatsTest, FinishedPreviewKeepsValidPathsWhenTrailingRatingsAreTruncated) {
+  auto& s = READING_STATS_STORE;
+  ASSERT_TRUE(s.setBookFinished("/Books/one.epub", true));
+  ASSERT_TRUE(s.setBookRating("/Books/one.epub", 5));
+  ASSERT_TRUE(s.saveToFile());
+
+  const std::string path = testRoot() + "/system/reading_stats.bin";
+  const auto size = std::filesystem::file_size(path);
+  ASSERT_GT(size, 0u);
+  std::filesystem::resize_file(path, size - 1);
+
+  std::vector<FinishedBookPreview> preview;
+  uint16_t total = 0;
+  uint16_t rated = 99;
+  uint32_t ratingSum = 99;
+  ASSERT_TRUE(ReadingStatsStore::readFinishedPreviewFromFile(preview, 6, total, rated, ratingSum));
+  ASSERT_EQ(preview.size(), 1u);
+  EXPECT_EQ(preview[0].path, "/Books/one.epub");
+  EXPECT_EQ(preview[0].rating, 0);
+  EXPECT_EQ(total, 1);
+  EXPECT_EQ(rated, 0);
+  EXPECT_EQ(ratingSum, 0u);
+}
+
 TEST_F(StatsTest, VersionFourCompletionLoadsAsUnrated) {
   auto& s = READING_STATS_STORE;
   ASSERT_TRUE(s.setBookFinished("/Books/legacy.epub", true));

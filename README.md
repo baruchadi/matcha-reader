@@ -104,13 +104,16 @@ settings on one screen, starting with the view switch: **Matcha Covers** (the de
 
 **Settings → Display → UI Theme → Reading Hub** replaces the traditional home menu with four root sections:
 **Now**, **Library**, **Queue**, and **Read**. On button devices, the side keys switch sections and the two bottom
-direction keys move within the current section. Back opens the compact system menu; Confirm opens the focused item.
-Now is cover-led, with resume progress, the next queued book, and a completion summary. Library presents a Shelves
-entry followed by two rows of three book covers; Queue shows the first five books in their chosen order; Read shows
-completion and rating totals above up to six finished covers. Series stay grouped in the Library preview and retain
-their book-number subtitles throughout the hub. These previews are fixed-size and come from recents, queue paths, and
-the compact completion block, so the root screen does not load or duplicate the full catalog or multi-year stats
-history. Changing back to Classic, Lyra, Lyra Extended, or RoundedRaff restores the original home screen.
+direction keys move backward and forward within the current section; the on-screen hints use `<` and `>` to match.
+Back opens the compact system menu and Confirm opens the focused item. Now is cover-led, with resume progress, a
+clearly labelled Up Next card, and a completion summary. Library lists the actual shelves directly; selecting one
+opens that shelf rather than first opening the legacy Shelves folder. Queue shows the first five books in their chosen
+order. Hold Confirm on a queued book to move it earlier or later. Read has one Recently completed section, an explicit
+**Show all completed books** action, and up to six finished covers; hold Confirm on a cover to add or edit its rating.
+Series stay together in completed previews and retain their book-number subtitles alongside ratings. The initial Now
+screen loads only its current and next books; shelf, queue and completed metadata are resolved lazily when their
+section is opened, and cover thumbnail paths are cached so focus movement does not rescan thumbnail directories.
+Changing back to Classic, Lyra, Lyra Extended, or RoundedRaff restores the original home screen.
 
 ### Reading stats
 

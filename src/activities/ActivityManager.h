@@ -100,6 +100,7 @@ class ActivityManager {
   void goToFileBrowser(std::string path = {});
   void goToLibrary();
   void goToShelves();
+  void goToShelf(std::string path, bool completed = false);
   void goToReadingQueue();
   void goToCompletedLibrary();
   void goToBrowser();

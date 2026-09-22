@@ -1135,11 +1135,13 @@ void CoverLibraryActivity::onEnter() {
   openShelfIndex = -1;
   if (selectedTab == 1) {
     loadShelves();
-    if (initialView == InitialView::COMPLETED) {
-      const auto completed =
-          std::find_if(shelves.begin(), shelves.end(), [](const ShelfInfo& shelf) { return shelf.completed; });
-      if (completed != shelves.end()) {
-        openShelfIndex = static_cast<int>(completed - shelves.begin());
+    if (initialView == InitialView::COMPLETED || initialShelfCompleted || !initialShelfPath.empty()) {
+      const auto requested = std::find_if(shelves.begin(), shelves.end(), [&](const ShelfInfo& shelf) {
+        if (initialView == InitialView::COMPLETED || initialShelfCompleted) return shelf.completed;
+        return !shelf.completed && shelf.folderPath == initialShelfPath;
+      });
+      if (requested != shelves.end()) {
+        openShelfIndex = static_cast<int>(requested - shelves.begin());
         loadShelfBooks(openShelfIndex);
       }
     }
