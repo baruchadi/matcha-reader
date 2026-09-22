@@ -299,6 +299,16 @@ void ActivityManager::goToLibrary() {
   replaceActivity(std::move(activity));
 }
 
+void ActivityManager::goToShelves() {
+  auto activity =
+      makeUniqueNoThrow<CoverLibraryActivity>(renderer, mappedInput, CoverLibraryActivity::InitialView::SHELVES);
+  if (!activity) {
+    LOG_ERR("ACT", "OOM: shelves activity");
+    return;
+  }
+  replaceActivity(std::move(activity));
+}
+
 void ActivityManager::goToReadingQueue() {
   auto activity =
       makeUniqueNoThrow<CoverLibraryActivity>(renderer, mappedInput, CoverLibraryActivity::InitialView::QUEUE);

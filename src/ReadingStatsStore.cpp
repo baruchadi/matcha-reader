@@ -79,6 +79,17 @@ int daysInMonth(uint16_t y, uint8_t m) {
   if (m == 2 && (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0))) return 29;
   return dm[m];
 }
+
+bool skipBytes(HalFile& file, size_t count) {
+  uint8_t discard[64];
+  while (count > 0) {
+    const size_t chunk = std::min(count, sizeof(discard));
+    const int read = static_cast<int>(file.read(discard, chunk));
+    if (read < 0 || static_cast<size_t>(read) != chunk) return false;
+    count -= chunk;
+  }
+  return true;
+}
 }  // namespace
 
 void ReadingStatsStore::addMinutes(uint16_t year, uint8_t month, uint8_t day, uint16_t minutes) {
@@ -405,6 +416,87 @@ bool ReadingStatsStore::readFinishedCountFromFile(uint16_t& outCount) {
   f.close();
   if (!countRead) outCount = 0;
   return countRead;
+}
+
+bool ReadingStatsStore::readFinishedPreviewFromFile(std::vector<FinishedBookPreview>& out, const size_t maxBooks,
+                                                    uint16_t& outTotal, uint16_t& outRatedCount,
+                                                    uint32_t& outRatingSum) {
+  out.clear();
+  outTotal = 0;
+  outRatedCount = 0;
+  outRatingSum = 0;
+  out.reserve(std::min<size_t>(maxBooks, 500));
+
+  HalFile f;
+  if (!Storage.openFileForRead("STAT", statsPath().c_str(), f)) return false;
+
+  uint8_t version = 0;
+  uint16_t dayCount = 0;
+  if (f.read(&version, 1) != 1 || f.read(reinterpret_cast<uint8_t*>(&dayCount), 2) != 2 || version < 2 ||
+      f.read(reinterpret_cast<uint8_t*>(&outTotal), 2) != 2) {
+    return false;
+  }
+
+  if (!skipBytes(f, static_cast<size_t>(dayCount) * sizeof(DailyReading))) return false;
+
+  uint16_t pathCount = 0;
+  if (f.read(reinterpret_cast<uint8_t*>(&pathCount), 2) != 2 || pathCount > 500) return false;
+  for (uint16_t index = 0; index < pathCount; index++) {
+    uint16_t pathLength = 0;
+    if (f.read(reinterpret_cast<uint8_t*>(&pathLength), 2) != 2 || pathLength > 500) return false;
+    const bool keep = maxBooks > 0 && index + maxBooks >= pathCount;
+    if (keep) {
+      FinishedBookPreview preview;
+      preview.path.assign(pathLength, '\0');
+      if (pathLength > 0 && f.read(reinterpret_cast<uint8_t*>(&preview.path[0]), pathLength) != pathLength) {
+        return false;
+      }
+      out.push_back(std::move(preview));
+    } else if (!skipBytes(f, pathLength)) {
+      return false;
+    }
+  }
+
+  if (version >= 3) {
+    uint16_t bookCount = 0;
+    if (f.read(reinterpret_cast<uint8_t*>(&bookCount), 2) != 2 || bookCount > MAX_BOOKS) return false;
+    for (uint16_t index = 0; index < bookCount; index++) {
+      uint16_t pathLength = 0;
+      uint8_t languageLength = 0;
+      if (f.read(reinterpret_cast<uint8_t*>(&pathLength), 2) != 2 || pathLength > 500 || !skipBytes(f, pathLength) ||
+          f.read(&languageLength, 1) != 1 || languageLength > MAX_STORED_LANGUAGE ||
+          !skipBytes(f, static_cast<size_t>(languageLength) + 8)) {
+        return false;
+      }
+    }
+  }
+
+  if (version >= 4) {
+    uint16_t languageDayCount = 0;
+    if (f.read(reinterpret_cast<uint8_t*>(&languageDayCount), 2) != 2 ||
+        !skipBytes(f, static_cast<size_t>(languageDayCount) * 10)) {
+      return false;
+    }
+  }
+
+  if (version >= 5) {
+    uint16_t ratingCount = 0;
+    if (f.read(reinterpret_cast<uint8_t*>(&ratingCount), 2) != 2 || ratingCount != pathCount) return false;
+    const size_t retainedStart = pathCount - out.size();
+    for (uint16_t index = 0; index < ratingCount; index++) {
+      uint8_t rating = 0;
+      if (f.read(&rating, 1) != 1 || rating > 5) return false;
+      if (rating > 0) {
+        outRatedCount++;
+        outRatingSum += rating;
+      }
+      if (index >= retainedStart) out[index - retainedStart].rating = rating;
+    }
+  }
+
+  std::reverse(out.begin(), out.end());
+  outTotal = pathCount;
+  return true;
 }
 
 int ReadingStatsStore::getStreak(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const {

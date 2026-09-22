@@ -105,9 +105,12 @@ settings on one screen, starting with the view switch: **Matcha Covers** (the de
 **Settings → Display → UI Theme → Reading Hub** replaces the traditional home menu with four root sections:
 **Now**, **Library**, **Queue**, and **Read**. On button devices, the side keys switch sections and the two bottom
 direction keys move within the current section. Back opens the compact system menu; Confirm opens the focused item.
-Library, queue, and completed-book summaries come from compact persisted indexes, so the root screen does not load or
-duplicate the full catalog. Changing back to Classic, Lyra, Lyra Extended, or RoundedRaff restores the original home
-screen.
+Now is cover-led, with resume progress, the next queued book, and a completion summary. Library presents a Shelves
+entry followed by two rows of three book covers; Queue shows the first five books in their chosen order; Read shows
+completion and rating totals above up to six finished covers. Series stay grouped in the Library preview and retain
+their book-number subtitles throughout the hub. These previews are fixed-size and come from recents, queue paths, and
+the compact completion block, so the root screen does not load or duplicate the full catalog or multi-year stats
+history. Changing back to Classic, Lyra, Lyra Extended, or RoundedRaff restores the original home screen.
 
 ### Reading stats
 

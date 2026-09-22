@@ -157,9 +157,24 @@ enum UIIcon {
 
 enum class RootExperience : uint8_t { LEGACY_HOME = 0, READING_HUB = 1 };
 
-struct ReadingHubRow {
-  const char* title;
-  const char* subtitle;
+struct ReadingHubScreen {
+  uint8_t section = 0;
+  int selectedIndex = 0;
+  const RecentBook* currentBook = nullptr;
+  int currentProgress = -1;
+  const RecentBook* nextBook = nullptr;
+  const RecentBook* libraryBooks = nullptr;
+  int libraryPreviewCount = 0;
+  int libraryTotalCount = 0;
+  const RecentBook* queueBooks = nullptr;
+  int queuePreviewCount = 0;
+  int queueTotalCount = 0;
+  const RecentBook* completedBooks = nullptr;
+  const uint8_t* completedRatings = nullptr;
+  int completedPreviewCount = 0;
+  int completedTotalCount = 0;
+  int ratedBookCount = 0;
+  int averageRatingTenths = 0;
 };
 
 // Default theme implementation (Classic Theme)
@@ -247,7 +262,7 @@ class BaseTheme {
   // A theme can replace the root experience while keeping the common component
   // contract for settings, dialogs, the library, and the reader.
   virtual RootExperience rootExperience() const { return RootExperience::LEGACY_HOME; }
-  virtual void drawReadingHubRows(const GfxRenderer&, Rect, const ReadingHubRow*, int, int) const {}
+  virtual void drawReadingHubScreen(const GfxRenderer&, Rect, const ReadingHubScreen&) const {}
 
   // Component drawing methods
   static void drawProgressBar(const GfxRenderer& renderer, Rect rect, size_t current, size_t total);

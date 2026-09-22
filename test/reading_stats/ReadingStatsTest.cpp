@@ -195,6 +195,30 @@ TEST_F(StatsTest, CompletedBookRatingRoundTripsAndLeavesWithCompletion) {
   EXPECT_EQ(s.getBookRating("/Books/rated.epub"), 0);
 }
 
+TEST_F(StatsTest, FinishedPreviewKeepsNewestBooksWithoutLoadingFullHistory) {
+  auto& s = READING_STATS_STORE;
+  for (int i = 0; i < 8; i++) {
+    const std::string path = "/Books/book-" + std::to_string(i) + ".epub";
+    ASSERT_TRUE(s.setBookFinished(path, true));
+    if (i % 2 == 0) ASSERT_TRUE(s.setBookRating(path, static_cast<uint8_t>(i / 2 + 1)));
+  }
+  ASSERT_TRUE(s.saveToFile());
+
+  std::vector<FinishedBookPreview> preview;
+  uint16_t total = 0;
+  uint16_t rated = 0;
+  uint32_t ratingSum = 0;
+  ASSERT_TRUE(ReadingStatsStore::readFinishedPreviewFromFile(preview, 6, total, rated, ratingSum));
+  ASSERT_EQ(preview.size(), 6u);
+  EXPECT_EQ(total, 8);
+  EXPECT_EQ(rated, 4);
+  EXPECT_EQ(ratingSum, 10u);
+  EXPECT_EQ(preview.front().path, "/Books/book-7.epub");
+  EXPECT_EQ(preview.front().rating, 0);
+  EXPECT_EQ(preview.back().path, "/Books/book-2.epub");
+  EXPECT_EQ(preview.back().rating, 2);
+}
+
 TEST_F(StatsTest, VersionFourCompletionLoadsAsUnrated) {
   auto& s = READING_STATS_STORE;
   ASSERT_TRUE(s.setBookFinished("/Books/legacy.epub", true));

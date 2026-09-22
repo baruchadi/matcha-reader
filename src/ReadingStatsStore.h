@@ -19,6 +19,11 @@ struct BookReading {
   int32_t lastReadDay = 0;  // days since the civil epoch, for eviction and (later) recency sorting
 };
 
+struct FinishedBookPreview {
+  std::string path;
+  uint8_t rating = 0;
+};
+
 // One day's minutes in one language -- what a "Japanese only" view needs (issue #38): with a
 // day granularity it yields the same streak/calendar/week/total numbers the overall stats show,
 // per language. A per-book-per-day matrix would give the same answers and more, but 150 books x
@@ -128,6 +133,11 @@ class ReadingStatsStore {
   // Home only needs the Completed count. Reading the five-byte file prefix avoids loading the
   // full multi-year stats history (and its vectors) just to draw one summary row.
   static bool readFinishedCountFromFile(uint16_t& outCount);
+  // Reading Hub needs a bounded cover preview, not the full multi-year stats store. This walks
+  // the persisted format and retains only the newest `maxBooks` completion paths while also
+  // deriving rating totals for the summary strip.
+  static bool readFinishedPreviewFromFile(std::vector<FinishedBookPreview>& out, size_t maxBooks, uint16_t& outTotal,
+                                          uint16_t& outRatedCount, uint32_t& outRatingSum);
 
   uint16_t getMinutesForDay(uint16_t year, uint8_t month, uint8_t day) const;
   uint16_t getMinutesThisWeek(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const;
