@@ -70,6 +70,7 @@ class CoverLibraryActivity final : public Activity {
   };
   std::vector<ShelfInfo> shelves;
   bool shelvesLoaded = false;
+  bool completedCatalogSeeded = false;
 
   // Shelf detail view
   struct ShelfBook {
@@ -119,6 +120,7 @@ class CoverLibraryActivity final : public Activity {
   std::atomic<int> gridCoverHeight_{0};
 
   void loadRecentBooks();
+  void ensureCompletedCatalogEntries();
   void loadBookProgress();
   void rebuildBookViews(bool pruneMissing = false);
   [[nodiscard]] bool isBookGridTab() const { return selectedTab == 0 || selectedTab == 2; }

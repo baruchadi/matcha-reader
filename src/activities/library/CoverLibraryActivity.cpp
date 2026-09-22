@@ -273,7 +273,7 @@ int CoverLibraryActivity::getCellHeight(int cellWidth) const {
   int coverWidth = cellWidth - 2 * COVER_PADDING;
   int coverHeight = coverWidth * COVER_ASPECT_DEN / COVER_ASPECT_NUM;
   int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
-  const int metadataLines = isCompletedShelfOpen() ? 3 : 2;
+  const int metadataLines = isCompletedShelfOpen() ? book_tile::COMPLETED_METADATA_LINES : 2;
   return COVER_PADDING + coverHeight + CELL_TEXT_GAP + lineHeight * metadataLines + COVER_PADDING;
 }
 
@@ -394,15 +394,18 @@ void CoverLibraryActivity::loadRecentBooks() {
   } else {
     recentBooks = RECENT_BOOKS.getBooks();
   }
-  // Completion history is the source of truth for the virtual Completed shelf. The optional
-  // scan cache may be absent after an upgrade or may contain only the handful of recent books;
-  // seed every still-present completed path so "Show all" is complete on its first frame.
-  if (initialView == InitialView::COMPLETED || initialShelfCompleted) {
-    for (const auto& path : READING_STATS_STORE.getFinishedBookPaths()) {
-      if (Storage.exists(path.c_str())) ensureBookPathInCatalog(recentBooks, path);
-    }
-  }
   rebuildBookViews();
+}
+
+void CoverLibraryActivity::ensureCompletedCatalogEntries() {
+  if (completedCatalogSeeded) return;
+  completedCatalogSeeded = true;
+  // Completion history is the source of truth for the virtual Completed shelf. Seed only when
+  // shelves are first requested, keeping Active-library startup free of these existence checks
+  // while making direct Completed and Library -> Shelves use the same complete collection.
+  for (const auto& path : READING_STATS_STORE.getFinishedBookPaths()) {
+    if (Storage.exists(path.c_str())) ensureBookPathInCatalog(recentBooks, path);
+  }
 }
 
 void CoverLibraryActivity::rebuildBookViews(const bool pruneMissing) {
@@ -1008,6 +1011,7 @@ Rect CoverLibraryActivity::tabBarRect() const {
 }
 
 void CoverLibraryActivity::loadShelves() {
+  ensureCompletedCatalogEntries();
   shelvesLoaded = true;
   shelves.clear();
 
@@ -1153,6 +1157,7 @@ void CoverLibraryActivity::onEnter() {
   READING_STATS_STORE.loadFromFile();
   readingQueueStore.clear();
   readingQueueStore.loadFromFile();
+  completedCatalogSeeded = false;
   loadRecentBooks();
   loadBookProgress();
   shelvesLoaded = false;

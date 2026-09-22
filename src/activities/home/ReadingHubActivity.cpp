@@ -244,7 +244,7 @@ void ReadingHubActivity::loadCompletionIndex() {
   for (const auto& book : RECENT_BOOKS.getBooks()) recentPaths.push_back(book.path);
   std::vector<uint8_t> recentCompleted;
   std::vector<FinishedBookPreview> previews;
-  if (!ReadingStatsStore::readFinishedPreviewFromFile(previews, MAX_COMPLETED_PREVIEW, completedBookCount,
+  if (!ReadingStatsStore::readFinishedPreviewFromFile(previews, MAX_COMPLETED_CANDIDATES, completedBookCount,
                                                       ratedBookCount, ratingSum, &recentPaths, &recentCompleted)) {
     completedBookCount = 0;
     ratedBookCount = 0;
@@ -252,7 +252,7 @@ void ReadingHubActivity::loadCompletionIndex() {
     recentCompleted.assign(recentPaths.size(), 0);
   }
   for (const auto& preview : previews) {
-    if (completedPathCount >= MAX_COMPLETED_PREVIEW) break;
+    if (completedPathCount >= MAX_COMPLETED_CANDIDATES) break;
     completedPaths[completedPathCount] = preview.path;
     completedPathRatings[completedPathCount] = preview.rating;
     completedPathCount++;
@@ -439,11 +439,14 @@ void ReadingHubActivity::loadCompletedBooks(const int limit) {
   completedRatings.fill(0);
   // readFinishedPreviewFromFile() already returns newest first. Copy directly: applying the
   // Library's series grouping here would make an older volume appear more recently completed.
-  for (int index = 0; index < std::min(completedPathCount, limit); index++) {
-    if (!Storage.exists(completedPaths[index].c_str())) continue;
+  std::array<uint8_t, MAX_COMPLETED_PREVIEW> availableIndices{};
+  const int availableCount = reading_hub::collectAvailableIndices(
+      completedPathCount, std::min(limit, MAX_COMPLETED_PREVIEW), availableIndices.data(),
+      [this](const int index) { return Storage.exists(completedPaths[index].c_str()); });
+  for (int availableIndex = 0; availableIndex < availableCount; availableIndex++) {
+    const int index = availableIndices[availableIndex];
     RecentBook book = resolveBook(completedPaths[index]);
     cacheCoverPath(book, 200);
-    if (completedPreviewCount >= MAX_COMPLETED_PREVIEW) break;
     completedBooks[completedPreviewCount] = std::move(book);
     completedRatings[completedPreviewCount] = completedPathRatings[index];
     completedPreviewCount++;

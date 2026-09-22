@@ -28,4 +28,14 @@ constexpr int readBookIndex(const int selectedIndex, const int previewCount) {
   return selectedIndex >= 0 && selectedIndex < previewCount ? selectedIndex : -1;
 }
 
+template <typename IsAvailable>
+int collectAvailableIndices(const int candidateCount, const int limit, uint8_t* output, IsAvailable&& isAvailable) {
+  if (!output || limit <= 0) return 0;
+  int count = 0;
+  for (int index = 0; index < candidateCount && count < limit; index++) {
+    if (isAvailable(index)) output[count++] = static_cast<uint8_t>(index);
+  }
+  return count;
+}
+
 }  // namespace reading_hub

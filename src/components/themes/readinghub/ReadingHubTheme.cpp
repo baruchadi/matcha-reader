@@ -19,6 +19,17 @@ constexpr int GRID_COLUMNS = 3;
 constexpr int GRID_GAP = 10;
 constexpr int COVER_ASPECT_NUM = 2;
 constexpr int COVER_ASPECT_DEN = 3;
+constexpr int TILE_PADDING = 5;
+
+int completedTileMetadataHeight(const GfxRenderer& renderer) {
+  // Top cover padding + cover/label gap + two text advances + the 13px star row.
+  return TILE_PADDING + 5 + renderer.getLineHeight(SMALL_FONT_ID) * (book_tile::COMPLETED_METADATA_LINES - 1) + 13;
+}
+
+int naturalCompletedTileHeight(const GfxRenderer& renderer, const int cellWidth) {
+  const int coverWidth = std::max(1, cellWidth - TILE_PADDING * 2);
+  return coverWidth * COVER_ASPECT_DEN / COVER_ASPECT_NUM + completedTileMetadataHeight(renderer);
+}
 
 void drawChevron(const GfxRenderer& renderer, const int x, const int y, const bool black) {
   renderer.drawLine(x - 5, y - 6, x + 1, y, black);
@@ -53,14 +64,14 @@ void drawBookTile(const GfxRenderer& renderer, const RecentBook& book, const uin
                   const int width, const int height, const bool selected, const bool completed) {
   if (selected) renderer.fillRect(x, y, width, height, true);
 
-  constexpr int tilePadding = 5;
-  const int coverWidth = width - tilePadding * 2;
   // Completed cards always reserve title + series + rating rows. Their covers and metadata stay
   // aligned whether a particular book is unrated or is not part of a series.
-  const int metadataHeight = completed ? 58 : 42;
-  const int coverHeight = std::min(height - metadataHeight, coverWidth * COVER_ASPECT_DEN / COVER_ASPECT_NUM);
-  const int coverX = x + tilePadding;
-  const int coverY = y + tilePadding;
+  const int metadataHeight = completed ? completedTileMetadataHeight(renderer) : 42;
+  const book_tile::CoverSize cover = book_tile::fitTwoByThreeCover(width, height, metadataHeight, TILE_PADDING);
+  const int coverWidth = cover.width;
+  const int coverHeight = cover.height;
+  const int coverX = x + (width - coverWidth) / 2;
+  const int coverY = y + TILE_PADDING;
   drawCover(renderer, book, coverX, coverY, coverWidth, coverHeight, selected);
 
   if (completed) {
@@ -362,7 +373,9 @@ void drawRead(const GfxRenderer& renderer, const Rect rect, const ReadingHubScre
     const int rowGap = 9;
     const int rowCount = screen.completedPreviewCount > GRID_COLUMNS ? 2 : 1;
     const int gridHeight = std::max(0, showAllY - 10 - gridTop);
-    const int rowHeight = std::max(1, (gridHeight - (rowCount - 1) * rowGap) / rowCount);
+    const int availableRowHeight = std::max(1, (gridHeight - (rowCount - 1) * rowGap) / rowCount);
+    const int cellWidth = (rect.width - GRID_GAP * (GRID_COLUMNS - 1)) / GRID_COLUMNS;
+    const int rowHeight = std::min(availableRowHeight, naturalCompletedTileHeight(renderer, cellWidth));
     const Rect firstRow{rect.x, gridTop, rect.width, rowHeight};
     drawBookRow(renderer, firstRow, screen.completedBooks, screen.completedRatings, 0, firstCount, 0,
                 screen.selectedIndex, true);

@@ -31,6 +31,7 @@ class ReadingHubActivity final : public Activity {
   static constexpr int MAX_QUEUE_PREVIEW = 5;
   static constexpr int MAX_COMPLETED_PREVIEW = 6;
   static constexpr int MAX_NOW_COMPLETED_PREVIEW = 3;
+  static constexpr int MAX_COMPLETED_CANDIDATES = MAX_COMPLETED_PREVIEW * 2;
 
   Section section = Section::NOW;
   int selectedIndex = 0;
@@ -45,8 +46,8 @@ class ReadingHubActivity final : public Activity {
   std::array<ReadingHubShelf, MAX_SHELF_PREVIEW> shelves;
   std::array<RecentBook, MAX_QUEUE_PREVIEW> queueBooks;
   std::array<RecentBook, MAX_COMPLETED_PREVIEW> completedBooks;
-  std::array<std::string, MAX_COMPLETED_PREVIEW> completedPaths;
-  std::array<uint8_t, MAX_COMPLETED_PREVIEW> completedPathRatings{};
+  std::array<std::string, MAX_COMPLETED_CANDIDATES> completedPaths;
+  std::array<uint8_t, MAX_COMPLETED_CANDIDATES> completedPathRatings{};
   std::array<uint8_t, MAX_COMPLETED_PREVIEW> completedRatings{};
   int shelfPreviewCount = 0;
   int shelfTotalCount = 0;
