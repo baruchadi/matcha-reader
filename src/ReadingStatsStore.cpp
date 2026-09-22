@@ -453,9 +453,14 @@ bool ReadingStatsStore::readFinishedPathHashesFromFile(std::unique_ptr<uint64_t[
   }
 
   uint16_t pathCount = 0;
-  if (f.read(reinterpret_cast<uint8_t*>(&pathCount), 2) != 2 || pathCount > 500 || headerFinishedCount != pathCount) {
+  if (f.read(reinterpret_cast<uint8_t*>(&pathCount), 2) != 2 || pathCount > 500) {
     return fail();
   }
+  // The path block is authoritative. Older builds could preserve a lifetime/high-water count in
+  // the header, so rejecting a valid path block on that mismatch hid every shelf even though the
+  // completed preview could still read the same file. A mutation load normalizes the header on
+  // its next safe save.
+  (void)headerFinishedCount;
   auto hashes = makeUniqueNoThrow<uint64_t[]>(pathCount == 0 ? 1 : pathCount);
   if (!hashes) return fail();
 

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -48,4 +49,25 @@ inline void mergeRecentBooks(std::vector<RecentBook>& catalog, std::vector<Recen
     }
     std::rotate(catalog.begin(), scanned, scanned + 1);
   }
+}
+
+inline std::string bookTitleFromPath(const std::string_view path) {
+  const size_t slash = path.find_last_of('/');
+  const size_t start = slash == std::string_view::npos ? 0 : slash + 1;
+  const size_t dot = path.find_last_of('.');
+  const size_t end = dot == std::string_view::npos || dot <= start ? path.size() : dot;
+  return std::string(path.substr(start, end - start));
+}
+
+// Completion history is independent of the optional library scan cache. Add a lightweight
+// fallback record for a finished path missing from that cache so "Show all completed" cannot
+// shrink to whichever few completed books happened to be recent. A background library scan
+// replaces the fallback title and cover with full metadata.
+inline bool ensureBookPathInCatalog(std::vector<RecentBook>& catalog, const std::string& path) {
+  if (path.empty() ||
+      std::any_of(catalog.begin(), catalog.end(), [&](const RecentBook& book) { return book.path == path; })) {
+    return false;
+  }
+  catalog.emplace_back(path, bookTitleFromPath(path), "", "");
+  return true;
 }

@@ -100,6 +100,7 @@ class ReadingStatsStore {
   // changes therefore use the same persisted list readers update at end-of-book, while leaving
   // the resume-position cache untouched.
   [[nodiscard]] bool isBookFinished(const std::string& bookPath) const;
+  [[nodiscard]] const std::vector<std::string>& getFinishedBookPaths() const { return finishedBookPaths; }
   bool setBookFinished(const std::string& bookPath, bool finished);
   [[nodiscard]] uint8_t getBookRating(const std::string& bookPath) const;
   // Ratings belong to completed books. Returns false for an unfinished path, an invalid

@@ -18,4 +18,14 @@ constexpr int stepRow(const int current, const int delta, const int rowCount) {
   return (current + delta % rowCount + rowCount) % rowCount;
 }
 
+// The completed-book grid is the primary content. "Show all" follows the final
+// preview rather than displacing the newest book at index zero.
+constexpr int readSelectionCount(const int previewCount) { return (previewCount > 0 ? previewCount : 0) + 1; }
+
+constexpr int readShowAllIndex(const int previewCount) { return previewCount > 0 ? previewCount : 0; }
+
+constexpr int readBookIndex(const int selectedIndex, const int previewCount) {
+  return selectedIndex >= 0 && selectedIndex < previewCount ? selectedIndex : -1;
+}
+
 }  // namespace reading_hub

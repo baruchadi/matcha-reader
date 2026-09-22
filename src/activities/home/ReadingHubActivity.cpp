@@ -26,7 +26,6 @@
 #include "LibraryPerformance.h"
 #include "ReadingStatsStore.h"
 #include "RecentBooksStore.h"
-#include "SeriesMetadata.h"
 #include "activities/ActivityManager.h"
 #include "activities/home/BookStatsActivity.h"
 #include "activities/home/EpubProgressUtil.h"
@@ -93,14 +92,6 @@ int readNonWhitespace(HubJsonFileReader& input) {
   return value;
 }
 
-std::string fallbackTitle(const std::string& path) {
-  const size_t slash = path.find_last_of('/');
-  const size_t start = slash == std::string::npos ? 0 : slash + 1;
-  const size_t dot = path.find_last_of('.');
-  const size_t end = dot == std::string::npos || dot <= start ? path.size() : dot;
-  return path.substr(start, end - start);
-}
-
 int progressForBook(const RecentBook& book) {
   if (FsHelpers::hasEpubExtension(book.path)) {
     const std::string cachePath = "/.crosspoint/epub_" + std::to_string(std::hash<std::string>{}(book.path));
@@ -153,7 +144,7 @@ void ReadingHubActivity::onEnter() {
 
   shelvesLoaded = false;
   queueFullyLoaded = false;
-  completedBooksLoaded = false;
+  completedBooksLoadLimit = 0;
   loadCompletionIndex();
   loadQueuePreview(section == Section::QUEUE ? MAX_QUEUE_PREVIEW : 1);
   ensureSectionLoaded();
@@ -197,7 +188,7 @@ int ReadingHubActivity::selectionCount() const {
     case Section::QUEUE:
       return std::max(1, queuePreviewCount);
     case Section::READ:
-      return 1 + completedPreviewCount;  // Show All is always the first action.
+      return reading_hub::readSelectionCount(completedPreviewCount);
   }
   return 1;
 }
@@ -208,7 +199,7 @@ RecentBook ReadingHubActivity::resolveBook(const std::string& path) const {
       std::find_if(recents.begin(), recents.end(), [&](const RecentBook& book) { return book.path == path; });
   RecentBook resolved = recent == recents.end() ? RECENT_BOOKS.getDataFromBook(path) : *recent;
   if (resolved.path.empty()) resolved.path = path;
-  if (resolved.title.empty()) resolved.title = fallbackTitle(path);
+  if (resolved.title.empty()) resolved.title = bookTitleFromPath(path);
   return resolved;
 }
 
@@ -266,7 +257,7 @@ void ReadingHubActivity::loadCompletionIndex() {
     completedPathRatings[completedPathCount] = preview.rating;
     completedPathCount++;
   }
-  completedBooksLoaded = false;
+  completedBooksLoadLimit = 0;
   selectCurrentBook(recentCompleted);
 }
 
@@ -282,8 +273,13 @@ void ReadingHubActivity::loadShelves() {
   std::unique_ptr<uint64_t[]> finishedHashes;
   uint16_t finishedHashCount = 0;
   HalFile file;
-  if (!ReadingStatsStore::readFinishedPathHashesFromFile(finishedHashes, finishedHashCount) ||
-      !Storage.openFileForRead("HUB", LIBRARY_CACHE_JSON, file)) {
+  if (!ReadingStatsStore::readFinishedPathHashesFromFile(finishedHashes, finishedHashCount)) {
+    // Completion filtering is an enhancement, not a prerequisite for displaying the catalog.
+    // A legacy or damaged stats file must not make an otherwise healthy Library cache vanish.
+    finishedHashes.reset();
+    finishedHashCount = 0;
+  }
+  if (!Storage.openFileForRead("HUB", LIBRARY_CACHE_JSON, file)) {
     shelfTotalCount = 1;
     shelvesLoaded = true;
     return;
@@ -438,37 +434,30 @@ void ReadingHubActivity::loadQueuePreview(const int limit) {
   queueFullyLoaded = limit >= MAX_QUEUE_PREVIEW;
 }
 
-void ReadingHubActivity::loadCompletedBooks() {
+void ReadingHubActivity::loadCompletedBooks(const int limit) {
   completedPreviewCount = 0;
   completedRatings.fill(0);
-  std::vector<RecentBook> books;
-  std::vector<uint8_t> ratings;
-  books.reserve(completedPathCount);
-  ratings.reserve(completedPathCount);
-  for (int index = 0; index < completedPathCount; index++) {
+  // readFinishedPreviewFromFile() already returns newest first. Copy directly: applying the
+  // Library's series grouping here would make an older volume appear more recently completed.
+  for (int index = 0; index < std::min(completedPathCount, limit); index++) {
     if (!Storage.exists(completedPaths[index].c_str())) continue;
     RecentBook book = resolveBook(completedPaths[index]);
     cacheCoverPath(book, 200);
-    books.push_back(std::move(book));
-    ratings.push_back(completedPathRatings[index]);
-  }
-
-  std::vector<uint16_t> order(books.size());
-  for (size_t index = 0; index < order.size(); index++) order[index] = static_cast<uint16_t>(index);
-  series_metadata::groupIndices(books, order);
-  for (const uint16_t index : order) {
     if (completedPreviewCount >= MAX_COMPLETED_PREVIEW) break;
-    completedBooks[completedPreviewCount] = std::move(books[index]);
-    completedRatings[completedPreviewCount] = ratings[index];
+    completedBooks[completedPreviewCount] = std::move(book);
+    completedRatings[completedPreviewCount] = completedPathRatings[index];
     completedPreviewCount++;
   }
-  completedBooksLoaded = true;
+  completedBooksLoadLimit = limit;
 }
 
 void ReadingHubActivity::ensureSectionLoaded() {
   if (section == Section::LIBRARY && !shelvesLoaded) loadShelves();
   if (section == Section::QUEUE && !queueFullyLoaded) loadQueuePreview(MAX_QUEUE_PREVIEW);
-  if (section == Section::READ && !completedBooksLoaded) loadCompletedBooks();
+  const int completedLimit = section == Section::NOW    ? MAX_NOW_COMPLETED_PREVIEW
+                             : section == Section::READ ? MAX_COMPLETED_PREVIEW
+                                                        : 0;
+  if (completedBooksLoadLimit < completedLimit) loadCompletedBooks(completedLimit);
 }
 
 void ReadingHubActivity::stepSection(const int delta) {
@@ -531,10 +520,11 @@ void ReadingHubActivity::activateSelection() {
       }
       return;
     case Section::READ:
-      if (selectedIndex == 0) {
+      if (selectedIndex == reading_hub::readShowAllIndex(completedPreviewCount)) {
         activityManager.goToCompletedLibrary();
-      } else if (selectedIndex - 1 < completedPreviewCount) {
-        activityManager.goToReader(completedBooks[selectedIndex - 1].path, true);
+      } else if (const int bookIndex = reading_hub::readBookIndex(selectedIndex, completedPreviewCount);
+                 bookIndex >= 0) {
+        activityManager.goToReader(completedBooks[bookIndex].path, true);
       }
       return;
   }
@@ -552,8 +542,10 @@ const RecentBook* ReadingHubActivity::selectedBook() const {
     case Section::QUEUE:
       return selectedIndex < queuePreviewCount ? &queueBooks[selectedIndex] : nullptr;
     case Section::READ:
-      return selectedIndex > 0 && selectedIndex - 1 < completedPreviewCount ? &completedBooks[selectedIndex - 1]
-                                                                            : nullptr;
+      if (const int bookIndex = reading_hub::readBookIndex(selectedIndex, completedPreviewCount); bookIndex >= 0) {
+        return &completedBooks[bookIndex];
+      }
+      return nullptr;
   }
   return nullptr;
 }
@@ -706,7 +698,7 @@ void ReadingHubActivity::refreshAfterBookAction() {
   queueStore.loadFromFile();
   queueFullyLoaded = false;
   shelvesLoaded = false;
-  completedBooksLoaded = false;
+  completedBooksLoadLimit = 0;
   loadCompletionIndex();
   loadQueuePreview(section == Section::QUEUE ? MAX_QUEUE_PREVIEW : 1);
   ensureSectionLoaded();
@@ -804,7 +796,9 @@ void ReadingHubActivity::render(RenderLock&&) {
   }
 
   const char* confirmLabel =
-      !menuOpen && section == Section::READ && selectedIndex == 0 ? tr(STR_HUB_SHOW_ALL) : tr(STR_OPEN);
+      !menuOpen && section == Section::READ && selectedIndex == reading_hub::readShowAllIndex(completedPreviewCount)
+          ? tr(STR_HUB_SHOW_ALL)
+          : tr(STR_OPEN);
   const auto labels = mappedInput.mapLabels(menuOpen ? tr(STR_BACK) : tr(STR_HUB_MENU), confirmLabel, "<", ">");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer(cleanInitialRefresh && firstPaint ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);

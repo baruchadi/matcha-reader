@@ -18,3 +18,13 @@ TEST(ReadingHubNavigationTest, FrontButtonsWrapWithinSection) {
   EXPECT_EQ(reading_hub::stepRow(0, -1, 3), 2);
   EXPECT_EQ(reading_hub::stepRow(0, 1, 0), 0);
 }
+
+TEST(ReadingHubNavigationTest, CompletedBooksComeBeforeShowAll) {
+  EXPECT_EQ(reading_hub::readSelectionCount(0), 1);
+  EXPECT_EQ(reading_hub::readShowAllIndex(0), 0);
+  EXPECT_EQ(reading_hub::readSelectionCount(6), 7);
+  EXPECT_EQ(reading_hub::readBookIndex(0, 6), 0);
+  EXPECT_EQ(reading_hub::readBookIndex(5, 6), 5);
+  EXPECT_EQ(reading_hub::readBookIndex(6, 6), -1);
+  EXPECT_EQ(reading_hub::readShowAllIndex(6), 6);
+}

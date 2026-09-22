@@ -30,6 +30,7 @@ class ReadingHubActivity final : public Activity {
   static constexpr int MAX_SHELF_PREVIEW = 7;
   static constexpr int MAX_QUEUE_PREVIEW = 5;
   static constexpr int MAX_COMPLETED_PREVIEW = 6;
+  static constexpr int MAX_NOW_COMPLETED_PREVIEW = 3;
 
   Section section = Section::NOW;
   int selectedIndex = 0;
@@ -60,7 +61,7 @@ class ReadingHubActivity final : public Activity {
   bool shelvesLoaded = false;
   bool shelfSummaryAvailable = false;
   bool queueFullyLoaded = false;
-  bool completedBooksLoaded = false;
+  int completedBooksLoadLimit = 0;
 
   [[nodiscard]] const char* sectionLabel() const;
   [[nodiscard]] const char* menuItemLabel(int index) const;
@@ -71,7 +72,7 @@ class ReadingHubActivity final : public Activity {
   void loadShelves();
   void loadQueuePreview(int limit);
   void loadCompletionIndex();
-  void loadCompletedBooks();
+  void loadCompletedBooks(int limit);
   void selectCurrentBook(const std::vector<uint8_t>& recentCompleted);
   void ensureSectionLoaded();
   void stepSection(int delta);

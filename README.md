@@ -91,8 +91,8 @@ remain available in **Shelves → Completed**.
 
 Completed books can be rated from one to five stars. The end-of-book screen offers **Rate This Book** immediately,
 and the same rating remains editable from Book Actions. A rating belongs to the completed status: marking the book
-unfinished clears it instead of creating a competing status record. Rated covers show a compact star-and-score badge
-inside the Completed achievement shelf.
+unfinished clears it instead of creating a competing status record. The Completed achievement shelf reserves the
+same title, series-number, and five-star rows for every cover, including unrated and non-series books.
 
 <p align="center"><img src="docs/images/screenshots/library.png" width="260" alt="Library grid with manga and EPUB covers side by side"></p>
 
@@ -110,11 +110,12 @@ clearly labelled Up Next card, and a completion summary. Library lists the actua
 opens that shelf rather than first opening the legacy Shelves folder. Queue shows the first five books in their chosen
 order. Hold Confirm on a queued book to move it earlier or later. Read has one Recently completed section, an explicit
 **Show all completed books** action, and up to six finished covers; hold Confirm on a cover to add or edit its rating.
-Series stay together in completed previews and retain their book-number subtitles alongside ratings. The initial Now
-screen loads only its current and next books; shelf, queue and completed metadata are resolved lazily when their
-section is opened. The shelf summary streams the same persisted catalog as Matcha Covers one book at a time, so manga
-folders and ordinary ebooks produce matching shelf counts without loading the full catalog into RAM. Cover thumbnail
-paths are cached so focus movement does not rescan thumbnail directories.
+Recently completed previews keep completion order while series-number subtitles remain visible alongside ratings.
+Now also shows the three most recently completed books. The full Completed view uses completion history as its source
+of truth, so an absent or stale optional scan cache cannot reduce it to only recent titles. The shelf summary streams
+the same persisted catalog as Matcha Covers one book at a time, so manga folders and ordinary ebooks produce matching
+shelf counts without loading the full catalog into RAM. Cover thumbnail paths are cached so focus movement does not
+rescan thumbnail directories.
 Changing back to Classic, Lyra, Lyra Extended, or RoundedRaff restores the original home screen.
 
 ### Reading stats

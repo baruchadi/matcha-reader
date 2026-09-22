@@ -96,6 +96,10 @@ class CoverLibraryActivity final : public Activity {
 
   int getVisibleRows(int cellHeight, int contentHeight) const;
   int getCellHeight(int cellWidth) const;
+  [[nodiscard]] bool isCompletedShelfOpen() const {
+    return openShelfIndex >= 0 && openShelfIndex < static_cast<int>(shelves.size()) &&
+           shelves[openShelfIndex].completed;
+  }
   // The grid's viewport height, below the tab bar and above the button hints.
   [[nodiscard]] int gridContentHeight() const;
   // Highest scrollRow that still fills the viewport, for the swipe that scrolls it.

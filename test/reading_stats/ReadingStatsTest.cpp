@@ -248,6 +248,32 @@ TEST_F(StatsTest, FinishedPreviewMatchesAllCandidatesNotOnlyVisibleTail) {
       std::binary_search(hashes.get(), hashes.get() + hashCount, ReadingStatsStore::finishedPathHash(candidates[1])));
 }
 
+TEST_F(StatsTest, FinishedPathHashesTrustAnIntactPathBlockOverALegacyHeaderCount) {
+  auto& s = READING_STATS_STORE;
+  ASSERT_TRUE(s.setBookFinished("/Books/one.epub", true));
+  ASSERT_TRUE(s.setBookFinished("/Books/two.epub", true));
+  ASSERT_TRUE(s.saveToFile());
+
+  // Older builds treated this header field as a lifetime/high-water tally. The
+  // following path block is the authoritative current collection.
+  const std::string path = testRoot() + "/system/reading_stats.bin";
+  FILE* fp = fopen(path.c_str(), "r+b");
+  ASSERT_NE(fp, nullptr);
+  ASSERT_EQ(fseek(fp, 3, SEEK_SET), 0);
+  const uint16_t legacyHeaderCount = 16;
+  ASSERT_EQ(fwrite(&legacyHeaderCount, sizeof(legacyHeaderCount), 1, fp), 1u);
+  fclose(fp);
+
+  std::unique_ptr<uint64_t[]> hashes;
+  uint16_t hashCount = 0;
+  ASSERT_TRUE(ReadingStatsStore::readFinishedPathHashesFromFile(hashes, hashCount));
+  ASSERT_EQ(hashCount, 2);
+  EXPECT_TRUE(std::binary_search(hashes.get(), hashes.get() + hashCount,
+                                 ReadingStatsStore::finishedPathHash("/Books/one.epub")));
+  EXPECT_TRUE(std::binary_search(hashes.get(), hashes.get() + hashCount,
+                                 ReadingStatsStore::finishedPathHash("/Books/two.epub")));
+}
+
 TEST_F(StatsTest, FinishedPreviewKeepsValidPathsWhenTrailingRatingsAreTruncated) {
   auto& s = READING_STATS_STORE;
   ASSERT_TRUE(s.setBookFinished("/Books/one.epub", true));

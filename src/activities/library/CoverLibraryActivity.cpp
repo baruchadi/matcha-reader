@@ -27,6 +27,7 @@
 #include "activities/home/XtcProgressUtil.h"
 #include "activities/library/BookActionsActivity.h"
 #include "activities/library/BookRatingActivity.h"
+#include "components/BookTilePresentation.h"
 #include "components/UIScale.h"
 #include "components/UITheme.h"
 #include "components/icons/cover.h"
@@ -41,18 +42,6 @@ constexpr int SHELF_THUMB_HEIGHT = 54;
 constexpr uint32_t THUMB_IDLE_MS = 2000;
 constexpr size_t INDEX_IO_CHUNK_SIZE = 4096;
 constexpr uint32_t COVER_WORKER_STACK = 8192;
-
-void drawMiniStar(const GfxRenderer& renderer, const int centerX, const int centerY, const bool state) {
-  static constexpr int REL_X[10] = {0, 2, 6, 3, 4, 0, -4, -3, -6, -2};
-  static constexpr int REL_Y[10] = {-6, -2, -2, 1, 5, 3, 5, 1, -2, -2};
-  int xs[10];
-  int ys[10];
-  for (int i = 0; i < 10; i++) {
-    xs[i] = centerX + REL_X[i];
-    ys[i] = centerY + REL_Y[i];
-  }
-  renderer.fillPolygon(xs, ys, 10, state);
-}
 
 bool readExactChunked(HalFile& file, void* output, const size_t length) {
   auto* bytes = static_cast<uint8_t*>(output);
@@ -284,7 +273,8 @@ int CoverLibraryActivity::getCellHeight(int cellWidth) const {
   int coverWidth = cellWidth - 2 * COVER_PADDING;
   int coverHeight = coverWidth * COVER_ASPECT_DEN / COVER_ASPECT_NUM;
   int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
-  return COVER_PADDING + coverHeight + CELL_TEXT_GAP + lineHeight * 2 + COVER_PADDING;
+  const int metadataLines = isCompletedShelfOpen() ? 3 : 2;
+  return COVER_PADDING + coverHeight + CELL_TEXT_GAP + lineHeight * metadataLines + COVER_PADDING;
 }
 
 int CoverLibraryActivity::getVisibleRows(int cellHeight, int contentHeight) const {
@@ -403,6 +393,14 @@ void CoverLibraryActivity::loadRecentBooks() {
     mergeRecentBooks(recentBooks, RECENT_BOOKS.getBooks());
   } else {
     recentBooks = RECENT_BOOKS.getBooks();
+  }
+  // Completion history is the source of truth for the virtual Completed shelf. The optional
+  // scan cache may be absent after an upgrade or may contain only the handful of recent books;
+  // seed every still-present completed path so "Show all" is complete on its first frame.
+  if (initialView == InitialView::COMPLETED || initialShelfCompleted) {
+    for (const auto& path : READING_STATS_STORE.getFinishedBookPaths()) {
+      if (Storage.exists(path.c_str())) ensureBookPathInCatalog(recentBooks, path);
+    }
   }
   rebuildBookViews();
 }
@@ -1740,16 +1738,13 @@ void CoverLibraryActivity::drawGridCell(const int cellX, const int cellY, const 
   }
 
   // Progress badge on the cover (top-right, white on black): "NEW" for unstarted books,
-  // "Read" for finished ones, a star + score when the finished book is rated, else the
+  // "Read" for finished ones, else the
   // percentage. progressPercent < 0 means the idle-gated progress pass hasn't reached this book
   // yet -- draw nothing rather than a wrong badge.
   if (progressPercent >= 0) {
     char badgeBuf[8];
-    const bool showRating = progressPercent >= 100 && rating >= 1 && rating <= 5;
     if (progressPercent <= 0) {
       snprintf(badgeBuf, sizeof(badgeBuf), "%s", tr(STR_BOOK_BADGE_NEW));
-    } else if (showRating) {
-      snprintf(badgeBuf, sizeof(badgeBuf), "%u", static_cast<unsigned int>(rating));
     } else if (progressPercent >= 100) {
       snprintf(badgeBuf, sizeof(badgeBuf), "%s", tr(STR_BOOK_BADGE_READ));
     } else {
@@ -1757,7 +1752,7 @@ void CoverLibraryActivity::drawGridCell(const int cellX, const int cellY, const 
     }
     const int badgeTextW = renderer.getTextWidth(SMALL_FONT_ID, badgeBuf);
     const int badgeH = renderer.getLineHeight(SMALL_FONT_ID) + 4;
-    const int badgeW = badgeTextW + 12 + (showRating ? 14 : 0);
+    const int badgeW = badgeTextW + 12;
     const int badgeX = coverX + coverWidth - badgeW;
     const int badgeY = coverY;
     // Black fill with a rounded bottom-left corner; pixels outside the arc stay untouched so
@@ -1778,12 +1773,7 @@ void CoverLibraryActivity::drawGridCell(const int cellX, const int cellY, const 
     // White border on the two exposed edges (left + bottom); top/right sit on the cover edge.
     renderer.drawLine(badgeX, badgeY, badgeX, arcCy, false);
     renderer.drawLine(arcCx, badgeY + badgeH - 1, badgeX + badgeW - 1, badgeY + badgeH - 1, false);
-    int badgeTextX = badgeX + 6;
-    if (showRating) {
-      drawMiniStar(renderer, badgeX + 10, badgeY + badgeH / 2, false);
-      badgeTextX += 14;
-    }
-    renderer.drawText(SMALL_FONT_ID, badgeTextX, badgeY + 2, badgeBuf, false);
+    renderer.drawText(SMALL_FONT_ID, badgeX + 6, badgeY + 2, badgeBuf, false);
   }
 
   // Title and optional series subtitle below the cover. The peek row skips both:
@@ -1794,16 +1784,13 @@ void CoverLibraryActivity::drawGridCell(const int cellX, const int cellY, const 
     renderer.drawText(SMALL_FONT_ID, coverX, labelY, line.c_str(), true);
   }
   if (drawTitle && !series.empty()) {
-    char seriesLabel[160];
-    if (seriesPosition > 0) {
-      char position[12];
-      series_metadata::formatPosition(seriesPosition, position, sizeof(position));
-      snprintf(seriesLabel, sizeof(seriesLabel), tr(STR_SERIES_BOOK_FORMAT), series.c_str(), position);
-    } else {
-      snprintf(seriesLabel, sizeof(seriesLabel), "%s", series.c_str());
-    }
+    char seriesLabel[96];
+    book_tile::formatSeriesLabel(series, seriesPosition, seriesLabel, sizeof(seriesLabel));
     const std::string line = renderer.truncatedText(SMALL_FONT_ID, seriesLabel, coverWidth);
     renderer.drawText(SMALL_FONT_ID, coverX, labelY + lineHeight, line.c_str(), true);
+  }
+  if (drawTitle && progressPercent >= 100) {
+    book_tile::drawRatingStars(renderer, coverX, labelY + lineHeight * 2 + 1, rating);
   }
 }
 

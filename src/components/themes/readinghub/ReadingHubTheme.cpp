@@ -7,7 +7,7 @@
 #include <cstdio>
 
 #include "RecentBook.h"
-#include "SeriesMetadata.h"
+#include "components/BookTilePresentation.h"
 #include "components/UITheme.h"
 #include "components/icons/cover.h"
 #include "components/icons/folder.h"
@@ -23,40 +23,6 @@ constexpr int COVER_ASPECT_DEN = 3;
 void drawChevron(const GfxRenderer& renderer, const int x, const int y, const bool black) {
   renderer.drawLine(x - 5, y - 6, x + 1, y, black);
   renderer.drawLine(x + 1, y, x - 5, y + 6, black);
-}
-
-void drawMiniStar(const GfxRenderer& renderer, const int centerX, const int centerY, const bool filled,
-                  const bool black) {
-  static constexpr int REL_X[10] = {0, 2, 6, 3, 4, 0, -4, -3, -6, -2};
-  static constexpr int REL_Y[10] = {-6, -2, -2, 1, 5, 3, 5, 1, -2, -2};
-  int xs[10];
-  int ys[10];
-  for (int i = 0; i < 10; i++) {
-    xs[i] = centerX + REL_X[i];
-    ys[i] = centerY + REL_Y[i];
-  }
-  if (filled) {
-    renderer.fillPolygon(xs, ys, 10, black);
-    return;
-  }
-  for (int i = 0; i < 10; i++) renderer.drawLine(xs[i], ys[i], xs[(i + 1) % 10], ys[(i + 1) % 10], black);
-}
-
-void drawRating(const GfxRenderer& renderer, const int x, const int y, const uint8_t rating, const bool black) {
-  for (int star = 0; star < 5; star++) drawMiniStar(renderer, x + star * 16 + 6, y + 6, star < rating, black);
-}
-
-void formatSeries(const RecentBook& book, char* output, const size_t outputSize) {
-  if (!output || outputSize == 0) return;
-  output[0] = '\0';
-  if (book.series.empty()) return;
-  if (book.seriesPosition == 0) {
-    snprintf(output, outputSize, "%s", book.series.c_str());
-    return;
-  }
-  char position[12];
-  series_metadata::formatPosition(book.seriesPosition, position, sizeof(position));
-  snprintf(output, outputSize, tr(STR_SERIES_BOOK_FORMAT), book.series.c_str(), position);
 }
 
 bool drawCover(const GfxRenderer& renderer, const RecentBook& book, const int x, const int y, const int width,
@@ -89,8 +55,9 @@ void drawBookTile(const GfxRenderer& renderer, const RecentBook& book, const uin
 
   constexpr int tilePadding = 5;
   const int coverWidth = width - tilePadding * 2;
-  const bool hasSeries = !book.series.empty();
-  const int metadataHeight = completed && rating > 0 && hasSeries ? 58 : 42;
+  // Completed cards always reserve title + series + rating rows. Their covers and metadata stay
+  // aligned whether a particular book is unrated or is not part of a series.
+  const int metadataHeight = completed ? 58 : 42;
   const int coverHeight = std::min(height - metadataHeight, coverWidth * COVER_ASPECT_DEN / COVER_ASPECT_NUM);
   const int coverX = x + tilePadding;
   const int coverY = y + tilePadding;
@@ -113,14 +80,17 @@ void drawBookTile(const GfxRenderer& renderer, const RecentBook& book, const uin
   renderer.drawText(SMALL_FONT_ID, coverX, textY, title.c_str(), ink, EpdFontFamily::BOLD);
 
   char series[96];
-  formatSeries(book, series, sizeof(series));
-  int metadataY = textY + renderer.getLineHeight(SMALL_FONT_ID);
+  book_tile::formatSeriesLabel(book.series, book.seriesPosition, series, sizeof(series));
+  const int seriesY = textY + renderer.getLineHeight(SMALL_FONT_ID);
   if (series[0] != '\0') {
     const auto subtitle = renderer.truncatedText(SMALL_FONT_ID, series, coverWidth);
-    renderer.drawText(SMALL_FONT_ID, coverX, metadataY, subtitle.c_str(), ink);
-    metadataY += renderer.getLineHeight(SMALL_FONT_ID);
+    renderer.drawText(SMALL_FONT_ID, coverX, seriesY, subtitle.c_str(), ink);
   }
-  if (completed && rating > 0) drawRating(renderer, coverX, metadataY + 1, rating, ink);
+  if (completed) {
+    // Leave a stable series row even when empty, then render five stars (outlined when unrated).
+    const int ratingY = textY + renderer.getLineHeight(SMALL_FONT_ID) * 2 + 1;
+    book_tile::drawRatingStars(renderer, coverX, ratingY, rating, ink);
+  }
 }
 
 void drawBookRow(const GfxRenderer& renderer, const Rect rect, const RecentBook* books, const uint8_t* ratings,
@@ -168,7 +138,8 @@ void drawNow(const GfxRenderer& renderer, const Rect rect, const ReadingHubScree
       textY += renderer.getLineHeight(SMALL_FONT_ID) + 3;
     }
     char series[96];
-    formatSeries(*screen.currentBook, series, sizeof(series));
+    book_tile::formatSeriesLabel(screen.currentBook->series, screen.currentBook->seriesPosition, series,
+                                 sizeof(series));
     if (series[0] != '\0') {
       const auto subtitle = renderer.truncatedText(SMALL_FONT_ID, series, textWidth);
       renderer.drawText(SMALL_FONT_ID, textX, textY + 3, subtitle.c_str(), ink);
@@ -210,7 +181,7 @@ void drawNow(const GfxRenderer& renderer, const Rect rect, const ReadingHubScree
                                               rect.width - coverWidth - 55, EpdFontFamily::BOLD);
     renderer.drawText(UI_12_FONT_ID, textX, queueY + 31, title.c_str(), queueInk, EpdFontFamily::BOLD);
     char series[96];
-    formatSeries(*screen.nextBook, series, sizeof(series));
+    book_tile::formatSeriesLabel(screen.nextBook->series, screen.nextBook->seriesPosition, series, sizeof(series));
     const char* subtitleText = series[0] == '\0' ? screen.nextBook->author.c_str() : series;
     const auto subtitle = renderer.truncatedText(SMALL_FONT_ID, subtitleText, rect.width - coverWidth - 55);
     renderer.drawText(SMALL_FONT_ID, textX, queueY + 65, subtitle.c_str(), queueInk);
@@ -220,16 +191,26 @@ void drawNow(const GfxRenderer& renderer, const Rect rect, const ReadingHubScree
   }
   drawChevron(renderer, rect.x + rect.width - 15, queueY + queueHeight / 2, queueInk);
 
-  const int achievementY = queueY + queueHeight + 18;
-  renderer.drawLine(rect.x, achievementY, rect.x + rect.width, achievementY, true);
+  const int completedY = queueY + queueHeight + 18;
+  renderer.drawLine(rect.x, completedY, rect.x + rect.width, completedY, true);
   char completed[48];
-  char queued[48];
   snprintf(completed, sizeof(completed), tr(STR_HUB_COMPLETED_COUNT), screen.completedTotalCount);
-  snprintf(queued, sizeof(queued), tr(STR_HUB_QUEUE_COUNT), screen.queueTotalCount);
-  renderer.drawText(UI_10_FONT_ID, rect.x + 4, achievementY + 14, completed, true, EpdFontFamily::BOLD);
-  const int queuedWidth = renderer.getTextWidth(SMALL_FONT_ID, queued);
-  renderer.drawText(SMALL_FONT_ID, rect.x + rect.width - queuedWidth - 4, achievementY + 17, queued, true);
-  if (screen.selectedIndex == 2) renderer.invertRect(rect.x, achievementY + 7, rect.width, 35);
+  renderer.drawText(UI_10_FONT_ID, rect.x + 4, completedY + 12, tr(STR_HUB_RECENTLY_COMPLETED), true,
+                    EpdFontFamily::BOLD);
+  const int completedWidth = renderer.getTextWidth(SMALL_FONT_ID, completed);
+  renderer.drawText(SMALL_FONT_ID, rect.x + rect.width - completedWidth - 4, completedY + 15, completed, true);
+
+  if (screen.completedBooks && screen.completedPreviewCount > 0) {
+    const int previewTop = completedY + 39;
+    const Rect preview{rect.x, previewTop, rect.width, std::max(1, rect.y + rect.height - previewTop)};
+    drawBookRow(renderer, preview, screen.completedBooks, screen.completedRatings, 0,
+                std::min(GRID_COLUMNS, screen.completedPreviewCount), 0, -1, true);
+  } else {
+    renderer.drawText(SMALL_FONT_ID, rect.x + 4, completedY + 48, tr(STR_NO_COMPLETED_BOOKS));
+  }
+  if (screen.selectedIndex == 2) {
+    renderer.invertRect(rect.x, completedY + 5, rect.width, rect.y + rect.height - completedY - 5);
+  }
 }
 
 void drawLibrary(const GfxRenderer& renderer, const Rect rect, const ReadingHubScreen& screen) {
@@ -331,7 +312,8 @@ void drawQueue(const GfxRenderer& renderer, const Rect rect, const ReadingHubScr
         renderer.truncatedText(UI_12_FONT_ID, screen.queueBooks[index].title.c_str(), textWidth, EpdFontFamily::BOLD);
     renderer.drawText(UI_12_FONT_ID, textX, y + 20, title.c_str(), !selected, EpdFontFamily::BOLD);
     char series[96];
-    formatSeries(screen.queueBooks[index], series, sizeof(series));
+    book_tile::formatSeriesLabel(screen.queueBooks[index].series, screen.queueBooks[index].seriesPosition, series,
+                                 sizeof(series));
     const char* subtitleText = series[0] == '\0' ? screen.queueBooks[index].author.c_str() : series;
     const auto subtitle = renderer.truncatedText(SMALL_FONT_ID, subtitleText, textWidth);
     renderer.drawText(SMALL_FONT_ID, textX, y + 53, subtitle.c_str(), !selected);
@@ -363,38 +345,43 @@ void drawRead(const GfxRenderer& renderer, const Rect rect, const ReadingHubScre
   UITheme::drawCenteredText(renderer, Rect{rect.x + third * 2, rect.y, rect.width - third * 2, summaryHeight},
                             SMALL_FONT_ID, rect.y + 43, tr(STR_HUB_AVERAGE_LABEL));
 
-  constexpr int showAllHeight = 50;
-  const int showAllY = rect.y + summaryHeight + 10;
-  renderer.drawRoundedRect(rect.x, showAllY, rect.width, showAllHeight, 2, CARD_RADIUS, true);
-  renderer.drawText(UI_12_FONT_ID, rect.x + 15, showAllY + 12, tr(STR_HUB_SHOW_ALL_COMPLETED), true,
-                    EpdFontFamily::BOLD);
-  drawChevron(renderer, rect.x + rect.width - 14, showAllY + showAllHeight / 2, true);
-  if (screen.selectedIndex == 0) renderer.invertRect(rect.x, showAllY, rect.width, showAllHeight);
-
-  const int groupY = showAllY + showAllHeight + 16;
+  const int groupY = rect.y + summaryHeight + 10;
   renderer.drawText(UI_10_FONT_ID, rect.x, groupY, tr(STR_HUB_RECENTLY_COMPLETED), true, EpdFontFamily::BOLD);
   const int rateHintWidth = renderer.getTextWidth(SMALL_FONT_ID, tr(STR_HUB_HOLD_TO_RATE));
   renderer.drawText(SMALL_FONT_ID, rect.x + rect.width - rateHintWidth, groupY + 2, tr(STR_HUB_HOLD_TO_RATE));
 
+  constexpr int showAllHeight = 50;
+  const int showAllY = rect.y + rect.height - showAllHeight;
+
   if (!screen.completedBooks || screen.completedPreviewCount <= 0) {
-    UITheme::drawCenteredWrappedText(
-        renderer, Rect{rect.x + 20, groupY + 38, rect.width - 40, rect.height - (groupY - rect.y) - 58}, UI_12_FONT_ID,
-        tr(STR_NO_COMPLETED_BOOKS), 3, true, EpdFontFamily::BOLD);
-    return;
+    UITheme::drawCenteredWrappedText(renderer, Rect{rect.x + 20, groupY + 38, rect.width - 40, showAllY - groupY - 48},
+                                     UI_12_FONT_ID, tr(STR_NO_COMPLETED_BOOKS), 3, true, EpdFontFamily::BOLD);
+  } else {
+    const int firstCount = std::min(GRID_COLUMNS, screen.completedPreviewCount);
+    const int gridTop = groupY + 25;
+    const int rowGap = 9;
+    const int rowCount = screen.completedPreviewCount > GRID_COLUMNS ? 2 : 1;
+    const int gridHeight = std::max(0, showAllY - 10 - gridTop);
+    const int rowHeight = std::max(1, (gridHeight - (rowCount - 1) * rowGap) / rowCount);
+    const Rect firstRow{rect.x, gridTop, rect.width, rowHeight};
+    drawBookRow(renderer, firstRow, screen.completedBooks, screen.completedRatings, 0, firstCount, 0,
+                screen.selectedIndex, true);
+
+    const int remaining = screen.completedPreviewCount - firstCount;
+    if (remaining > 0) {
+      const Rect secondRow{rect.x, firstRow.y + firstRow.height + rowGap, rect.width, rowHeight};
+      drawBookRow(renderer, secondRow, screen.completedBooks, screen.completedRatings, firstCount,
+                  std::min(GRID_COLUMNS, remaining), 0, screen.selectedIndex, true);
+    }
   }
 
-  const int firstCount = std::min(GRID_COLUMNS, screen.completedPreviewCount);
-  const int gridTop = groupY + 25;
-  const int rowHeight = std::max(170, (rect.y + rect.height - gridTop - 10) / 2);
-  const Rect firstRow{rect.x, gridTop, rect.width, rowHeight};
-  drawBookRow(renderer, firstRow, screen.completedBooks, screen.completedRatings, 0, firstCount, 1,
-              screen.selectedIndex, true);
-
-  const int remaining = screen.completedPreviewCount - firstCount;
-  if (remaining <= 0) return;
-  const Rect secondRow{rect.x, firstRow.y + firstRow.height + 9, rect.width, rowHeight};
-  drawBookRow(renderer, secondRow, screen.completedBooks, screen.completedRatings, firstCount,
-              std::min(GRID_COLUMNS, remaining), 1, screen.selectedIndex, true);
+  renderer.drawRoundedRect(rect.x, showAllY, rect.width, showAllHeight, 2, CARD_RADIUS, true);
+  renderer.drawText(UI_12_FONT_ID, rect.x + 15, showAllY + 12, tr(STR_HUB_SHOW_ALL_COMPLETED), true,
+                    EpdFontFamily::BOLD);
+  drawChevron(renderer, rect.x + rect.width - 14, showAllY + showAllHeight / 2, true);
+  if (screen.selectedIndex == screen.completedPreviewCount) {
+    renderer.invertRect(rect.x, showAllY, rect.width, showAllHeight);
+  }
 }
 }  // namespace
 

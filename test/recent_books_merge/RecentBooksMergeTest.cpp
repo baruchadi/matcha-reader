@@ -19,6 +19,22 @@ TEST(RecentBooksMerge, KeepsRecentsFirstWithoutDuplicatesOrLosingScannedCovers) 
   EXPECT_EQ(catalog[2].path, "/a.epub");
 }
 
+TEST(RecentBooksMerge, CompletedHistoryFillsAThreeBookCacheWithoutDroppingTheOtherThirteen) {
+  std::vector<RecentBook> catalog{{"/Books/book-0.epub", "Cached 0", "", ""},
+                                  {"/Books/book-1.epub", "Cached 1", "", ""},
+                                  {"/Books/book-2.epub", "Cached 2", "", ""}};
+
+  for (int index = 0; index < 16; index++) {
+    const std::string path = "/Books/book-" + std::to_string(index) + ".epub";
+    ensureBookPathInCatalog(catalog, path);
+  }
+
+  ASSERT_EQ(catalog.size(), 16u);
+  EXPECT_EQ(catalog[0].title, "Cached 0");
+  EXPECT_EQ(catalog[15].path, "/Books/book-15.epub");
+  EXPECT_EQ(catalog[15].title, "book-15");
+}
+
 TEST(LibraryCachePolicy, SharesExactCatalogAndPathBoundaries) {
   EXPECT_EQ(library_cache::MAX_BOOKS, 2048u);
   EXPECT_FALSE(library_cache::admitsPath(""));
