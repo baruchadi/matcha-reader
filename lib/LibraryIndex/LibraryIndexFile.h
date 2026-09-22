@@ -27,10 +27,8 @@ enum class SortOrder : uint8_t {
   AuthorDesc,
 };
 
-// One book to locate in the index: the complete-path hash (clixPathHash) is
-// the identity; fileSize, when nonzero, is a cheap in-record prefilter that
-// avoids reading the hash blob for most records. Zero means size unknown and
-// every record's hash is checked.
+// One book to locate in the index: the complete-path hash (clixPathHash) is the identity;
+// fileSize, when nonzero, is a cheap prefilter. Both live in the fixed record.
 struct BookIdentity {
   uint64_t pathHash;
   uint32_t fileSize;
@@ -73,7 +71,11 @@ class LibraryIndexFile {
   bool recentRowsFor(const BookIdentity* books, size_t count, uint16_t* outRows);
 
   bool readRecord(uint16_t ordinal, ClixRecord& out);
-  // Persisted complete-path fingerprint used by rebuild reconciliation.
+  using RecordVisitor = bool (*)(void* context, uint16_t ordinal, const ClixRecord& record);
+  // Sequential record walk. The visitor returns false to stop early. This is
+  // substantially cheaper on SD than one seek per record and retains no rows.
+  bool scanRecords(RecordVisitor visitor, void* context);
+  // Persisted complete-path fingerprint used by rebuild and completion reconciliation.
   bool readPathHash(const ClixRecord& record, uint64_t& out);
 
   // Display basename, exactly as it sits on the card. This is the only string
@@ -88,6 +90,11 @@ class LibraryIndexFile {
   // Cleaned author spelling before the library-wide spelling vote. Empty is a
   // valid value, so success is independent of `out.empty()`.
   bool readSourceAuthor(const ClixRecord& record, std::string& out);
+
+  bool readFolderPath(uint16_t folderId, std::string& out);
+  // Resolve sorted folder ids in one sequential pass over the variable-length
+  // folder section. `outPaths` has `count` slots.
+  bool readFolderPaths(const uint16_t* folderIds, size_t count, std::string* outPaths);
 
   // Absolute path of the book, rebuilt from its folder record.
   bool readPath(const ClixRecord& record, std::string& out);

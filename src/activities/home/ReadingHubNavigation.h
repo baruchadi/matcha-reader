@@ -2,9 +2,9 @@
 
 #include <cstdint>
 
-namespace reading_hub {
+#include "components/ReadingHubModel.h"
 
-enum class Section : uint8_t { NOW = 0, LIBRARY = 1, QUEUE = 2, READ = 3 };
+namespace reading_hub {
 
 constexpr int SECTION_COUNT = 4;
 
@@ -26,6 +26,19 @@ constexpr int readShowAllIndex(const int previewCount) { return previewCount > 0
 
 constexpr int readBookIndex(const int selectedIndex, const int previewCount) {
   return selectedIndex >= 0 && selectedIndex < previewCount ? selectedIndex : -1;
+}
+
+constexpr Section parentSection(const Page page) {
+  return page == Page::COMPLETED_BOOKS ? Section::READ : Section::LIBRARY;
+}
+
+constexpr int collectionPageCount(const int itemCount, const int pageSize) {
+  return pageSize > 0 && itemCount > 0 ? (itemCount + pageSize - 1) / pageSize : 1;
+}
+
+constexpr int stepCollectionPage(const int page, const int delta, const int itemCount, const int pageSize) {
+  const int pages = collectionPageCount(itemCount, pageSize);
+  return (page + delta % pages + pages) % pages;
 }
 
 template <typename IsAvailable>

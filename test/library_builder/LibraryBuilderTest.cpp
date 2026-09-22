@@ -99,6 +99,27 @@ TEST_F(LibraryBuilderTest, DirectoryEntriesAreEnumeratedOnce) {
   EXPECT_EQ(fake::directoryEntriesByPath["/folder/c.txt"], 1u);
 }
 
+TEST_F(LibraryBuilderTest, MangaFolderIsOneOpenableCatalogBook) {
+  fake::add("/Manga/Series/panels.idx", "panel index");
+  fake::add("/Manga/Series/page-001.jpg", "page");
+
+  ASSERT_TRUE(buildLibraryIndex("/", stats, false));
+
+  LibraryIndexFile index;
+  ASSERT_TRUE(index.open(INDEX));
+  ASSERT_EQ(index.bookCount(), 3);
+  bool found = false;
+  for (uint16_t ordinal = 0; ordinal < index.bookCount(); ordinal++) {
+    ClixRecord record{};
+    ASSERT_TRUE(index.readRecord(ordinal, record));
+    std::string path;
+    ASSERT_TRUE(index.readPath(record, path));
+    if (path == "/Manga/Series") found = true;
+  }
+  EXPECT_TRUE(found);
+  EXPECT_EQ(fake::directoryEntriesByPath["/Manga/Series/page-001.jpg"], 0u);
+}
+
 TEST_F(LibraryBuilderTest, DirectoryResumeFailureRetainsPreviousIndex) {
   initial();
   const auto old = fake::files[INDEX]->bytes;
@@ -325,7 +346,7 @@ TEST_F(LibraryBuilderTest, ReadWriteCloseAndAllocationFailuresRetainPreviousInde
   EXPECT_EQ(fake::files[INDEX]->bytes, old);
 }
 
-TEST_F(LibraryBuilderTest, TruncatedPersistedPathHashAbortsAndRetainsTheLiveIndex) {
+TEST_F(LibraryBuilderTest, TruncatedPersistedNameBlobAbortsAndRetainsTheLiveIndex) {
   initial();
   auto& bytes = fake::files[INDEX]->bytes;
   ClixHeader header{};

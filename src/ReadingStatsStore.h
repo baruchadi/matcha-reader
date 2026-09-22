@@ -56,6 +56,8 @@ class ReadingStatsStore {
   // long-lived singleton. When full, the least recently read book is dropped -- its minutes
   // stay counted in the per-day totals, which are the numbers the UI shows today.
   static constexpr size_t MAX_BOOKS = 150;
+  static constexpr size_t MAX_FINISHED_BOOKS = 500;
+  static constexpr size_t MAX_PERSISTED_PATH_BYTES = 500;
   std::vector<DailyReading> days;  // sorted ascending by date
   uint16_t booksFinished = 0;
   std::vector<std::string> finishedBookPaths;
@@ -146,7 +148,9 @@ class ReadingStatsStore {
   static bool readFinishedPreviewFromFile(std::vector<FinishedBookPreview>& out, size_t maxBooks, uint16_t& outTotal,
                                           uint16_t& outRatedCount, uint32_t& outRatingSum,
                                           const std::vector<std::string>* membershipCandidates = nullptr,
-                                          std::vector<uint8_t>* outMembership = nullptr);
+                                          std::vector<uint8_t>* outMembership = nullptr, size_t newestOffset = 0,
+                                          bool existingOnly = false, const uint64_t* existingPathHashes = nullptr,
+                                          size_t existingPathHashCount = 0);
   // Compact completion membership for callers that must compare many library entries without
   // loading the full stats history. At the on-disk cap this owns exactly 4KB of hashes.
   static bool readFinishedPathHashesFromFile(std::unique_ptr<uint64_t[]>& outHashes, uint16_t& outCount);

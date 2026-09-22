@@ -55,6 +55,7 @@ class JsonFileWriter final : public Print {
   }
 
   bool finish() { return output_.flush(); }
+  size_t position() const { return output_.position(); }
 
  private:
   serialization::BufferedFileWriter output_;
@@ -250,9 +251,12 @@ bool RecentBooksStore::saveBooksToPath(const std::vector<RecentBook>& books, con
     size_t writtenBooks = 0;
     for (const auto& book : books) {
       if (writtenBooks >= library_cache::MAX_BOOKS) break;
-      if (!library_cache::admitsPath(book.path)) continue;
-      if (!first) output.write(static_cast<uint8_t>(','));
-      first = false;
+      if (!library_cache::admitsPath(book.path) || book.title.size() > library_cache::MAX_TITLE_LENGTH ||
+          book.author.size() > library_cache::MAX_AUTHOR_LENGTH ||
+          book.coverBmpPath.size() > library_cache::MAX_COVER_PATH_LENGTH ||
+          book.series.size() > library_cache::MAX_SERIES_LENGTH) {
+        continue;
+      }
       record.clear();
       record["path"] = book.path;
       record["title"] = book.title;
@@ -261,6 +265,12 @@ bool RecentBooksStore::saveBooksToPath(const std::vector<RecentBook>& books, con
       record["series"] = book.series;
       record["seriesPosition"] = book.seriesPosition;
       record["seriesMetadataScanned"] = book.seriesMetadataScanned;
+      const size_t recordBytes = measureJson(record);
+      const size_t separatorBytes = first ? 0 : 1;
+      if (recordBytes > library_cache::MAX_RECORD_BYTES) continue;
+      if (output.position() + separatorBytes + recordBytes + 2 > library_cache::MAX_FILE_BYTES) break;
+      if (!first) output.write(static_cast<uint8_t>(','));
+      first = false;
       serializeJson(record, output);
       writtenBooks++;
     }

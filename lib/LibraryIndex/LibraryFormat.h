@@ -12,7 +12,7 @@
 //   folders       F variable-length records; the id of a folder IS its ordinal
 //   records       N x exactly 128 bytes, in folded-title order
 //   permutations  authorOrder[N] then arrivalOrder[N], both u16
-//   names         path hash, filename, display author, title, and source author blobs
+//   names         filename, display author, title, and source author blobs
 //
 // The fixed 128-byte record stride is the load-bearing choice: record k lives at
 // recordStart + 128k, so paging is O(1) in every sort order with no offset
@@ -28,7 +28,7 @@ namespace library {
 inline constexpr char CLIX_MAGIC[4] = {'C', 'L', 'X', '1'};
 // Bumping this is the whole migration: an index from an older version fails
 // validation and is rebuilt. No previous development format is accepted.
-inline constexpr uint8_t CLIX_FORMAT_VERSION = 2;
+inline constexpr uint8_t CLIX_FORMAT_VERSION = 3;
 
 // Bump when the fold, the article table, or a permutation's sort key changes.
 // Forces fold and ranks to be rebuilt while firstSeen values are preserved, so
@@ -36,22 +36,23 @@ inline constexpr uint8_t CLIX_FORMAT_VERSION = 2;
 inline constexpr uint8_t CLIX_FOLD_VERSION = 3;
 
 inline constexpr uint32_t CLIX_ALIGN = 512;
-inline constexpr size_t CLIX_FOLD_BYTES = 96;
+inline constexpr size_t CLIX_FOLD_BYTES = 88;
 inline constexpr size_t CLIX_AUTHOR_KEY_BYTES = 12;
 
 // A 2000-book card already produces a 429 KiB index. This hard bound keeps every
 // record count and permutation ordinal representable by uint16_t.
 inline constexpr uint16_t CLIX_MAX_RECORDS = 4096;
 
-// Complete-path fingerprint stored in front of every record's name blob.
-// Shared by the builder's reconciliation and the browser's recent-book lookup,
-// which must agree byte-for-byte on the hash of the same path.
+inline uint64_t clixPathHashByte(uint64_t hash, const uint8_t value) {
+  hash ^= value;
+  return hash * 1099511628211ULL;
+}
+
+// Complete-path fingerprint shared by reconciliation, completion membership and visible-page
+// resolution. Keeping the byte step here prevents those consumers from drifting apart.
 inline uint64_t clixPathHash(const char* data, const size_t len) {
   uint64_t hash = 14695981039346656037ULL;  // FNV-1a 64
-  for (size_t i = 0; i < len; i++) {
-    hash ^= static_cast<unsigned char>(data[i]);
-    hash *= 1099511628211ULL;
-  }
+  for (size_t i = 0; i < len; i++) hash = clixPathHashByte(hash, static_cast<uint8_t>(data[i]));
   return hash;
 }
 
@@ -102,6 +103,8 @@ struct ClixRecord {
   uint8_t metadataStatus;
   char fold[CLIX_FOLD_BYTES];
   char authorKey[CLIX_AUTHOR_KEY_BYTES];
+  // Complete-path identity in the fixed record keeps library-wide membership a sequential scan.
+  uint64_t pathHash;
   uint32_t modificationTime;
 };
 static_assert(sizeof(ClixRecord) == 128, "ClixRecord must be exactly 128 bytes");

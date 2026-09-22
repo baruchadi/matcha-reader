@@ -38,7 +38,6 @@ constexpr size_t STAGE_AUTHOR_BYTES = 128;
 constexpr size_t FOLDER_PATH_BYTES = 255;
 struct StagedEntry {
   ClixRecord record;
-  uint64_t pathHash;
   char name[STAGE_NAME_BYTES];
   // Cleaned source spelling from this book. The spelling actually shown
   // is chosen later, across every book by the same person.
@@ -286,13 +285,13 @@ int findPrior(WalkState& st, const uint64_t pathHash) {
   // The filename is a fallback for the title and nothing else: no parsing, and
   // never an author. Per review on #2885 -- no other reader parses filenames,
   // and a name pulled out of one by pattern is a guess wearing a fact's clothes.
-  std::string title = stemOf(name);
+  std::string title = isBookName(name) ? stemOf(name) : name;
   std::string author;
   bool titleFromBook = false;
   bool authorFromBook = false;
 
-  entry.pathHash = clixPathHash(fullPath.data(), fullPath.size());
-  const int priorIndex = findPrior(st, entry.pathHash);
+  entry.record.pathHash = clixPathHash(fullPath.data(), fullPath.size());
+  const int priorIndex = findPrior(st, entry.record.pathHash);
 
   const bool extractionExpected = st.readMetadata && FsHelpers::hasEpubExtension(name);
   const uint8_t expectedStatus = extractionExpected ? CLIX_METADATA_EXTRACTED : CLIX_METADATA_NOT_ATTEMPTED;
@@ -324,7 +323,7 @@ int findPrior(WalkState& st, const uint64_t pathHash) {
     if (hasBookTitle) {
       titleFromBook = true;
     } else {
-      title = stemOf(name);
+      title = isBookName(name) ? stemOf(name) : name;
     }
     st.stats->metadataReused++;
   }
@@ -454,17 +453,29 @@ void walk(WalkState& st, const std::string& path, const int depth) {
     st.nameBuf[0] = '\0';
     entry.getName(st.nameBuf, NAME_BUF_SIZE);
     const bool isDir = entry.isDirectory();
-    const uint32_t size = isDir ? 0 : static_cast<uint32_t>(entry.fileSize());
-    const uint32_t modificationTime = isDir ? 0 : entry.modificationTime();
+    uint32_t size = isDir ? 0 : static_cast<uint32_t>(entry.fileSize());
+    uint32_t modificationTime = isDir ? 0 : entry.modificationTime();
     entry.close();
 
     if (st.nameBuf[0] == '\0' || isHiddenOrSidecar(st.nameBuf)) continue;
     const std::string name(st.nameBuf);
+    const std::string fullPath = joinLibraryPath(path, name);
 
+    bool mangaDirectory = false;
     if (isDir) {
+      HalFile panels;
+      const std::string panelsPath = fullPath + "/panels.idx";
+      if (Storage.openFileForRead("LIBIDX", panelsPath.c_str(), panels)) {
+        size = static_cast<uint32_t>(panels.fileSize());
+        modificationTime = panels.modificationTime();
+        mangaDirectory = size > 0;
+        panels.close();
+      }
+    }
+    if (isDir && !mangaDirectory) {
       const size_t resumePosition = dir.position();
       dir.close();
-      walk(st, joinLibraryPath(path, name), depth + 1);
+      walk(st, fullPath, depth + 1);
       if (st.failed || st.books >= CLIX_MAX_RECORDS) return;
 
       dir = Storage.open(path.c_str());
@@ -476,7 +487,7 @@ void walk(WalkState& st, const std::string& path, const int depth) {
       }
       continue;
     }
-    if (!isBookName(name)) continue;
+    if (!mangaDirectory && !isBookName(name)) continue;
 
     // A zero-length book is a dangling directory entry: the name enumerates but
     // the contents do not exist. Counted rather than silently dropped.
@@ -530,7 +541,7 @@ void walk(WalkState& st, const std::string& path, const int depth) {
       st.folderId++;
       folderEmitted = true;
     }
-    if (!stageRecord(st, name, size, myFolderId, joinLibraryPath(path, name), modificationTime)) break;
+    if (!stageRecord(st, name, size, myFolderId, fullPath, modificationTime)) break;
   }
   dir.close();
 }
@@ -538,8 +549,7 @@ void walk(WalkState& st, const std::string& path, const int depth) {
 // Shared by the offset and write passes so the name-blob layout has one source of
 // truth.
 uint32_t blobBytesFor(const StagedEntry& entry, const StagedEntry& canonical) {
-  return sizeof(entry.pathHash) + entry.record.nameLen + 1u + canonical.authorLen + 1u + entry.titleLen + 1u +
-         entry.authorLen;
+  return entry.record.nameLen + 1u + canonical.authorLen + 1u + entry.titleLen + 1u + entry.authorLen;
 }
 
 bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order, const uint16_t* resolvedFirstSeen,
@@ -948,8 +958,7 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
     serviceBuilder(serviceUnits);
     if (!fetch(order[i], entry)) break;
     entry.record.nameOff = nameCursor;
-    // The blob holds the path hash, basename, chosen author spelling, title, and
-    // source author spelling used by later rebuilds.
+    // The blob holds the basename, chosen author spelling, title, and source author spelling.
     // Keeping them adjacent means no second offset has to live in the record.
     const uint16_t from = canonicalFrom ? canonicalFrom[i] : i;
     if (!fetch(order[from], canonical)) break;
@@ -975,7 +984,6 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
   for (uint16_t i = 0; i < n; i++) {
     serviceBuilder(serviceUnits);
     if (!fetch(order[i], entry)) break;
-    put(&entry.pathHash, sizeof(entry.pathHash));
     put(entry.name, entry.record.nameLen);
 
     const uint16_t from = canonicalFrom ? canonicalFrom[i] : i;

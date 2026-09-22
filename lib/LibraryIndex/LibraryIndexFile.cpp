@@ -102,8 +102,7 @@ bool LibraryIndexFile::recentRowsFor(const BookIdentity* books, const size_t cou
     return false;
   }
 
-  // Pass 1: record section, matching sizes in the chunk and confirming the few
-  // size hits against the stored path hash.
+  // Pass 1: record section, matching size and complete-path hash in the same chunk.
   uint16_t ordinals[MAX_IDENTITY_LOOKUPS];
   for (size_t i = 0; i < count; i++) ordinals[i] = NONE;
   size_t unresolved = count;
@@ -157,9 +156,9 @@ bool LibraryIndexFile::readRecord(const uint16_t ordinal, ClixRecord& out) {
 
   // Clamp here, at the single point every record enters the program. These
   // lengths come off an SD card that the user can write to and that can rot: a
-  // foldLen of 255 against a 96-byte field sends a string_view 159 bytes past the
-  // end of the record, and callers build views from them without looking. Fixing
-  // it at each call site would mean fixing it again at the next one.
+  // foldLen from a damaged card can point past the fixed fold field, and callers
+  // build views from it without looking. Fixing it at each call site would mean
+  // fixing it again at the next one.
   out.foldLen = static_cast<uint8_t>(std::min<size_t>(out.foldLen, CLIX_FOLD_BYTES));
   out.authorKeyLen = static_cast<uint8_t>(std::min<size_t>(out.authorKeyLen, CLIX_AUTHOR_KEY_BYTES));
   if (out.metadataStatus > CLIX_METADATA_FAILED) return false;
@@ -174,34 +173,47 @@ bool LibraryIndexFile::readRecord(const uint16_t ordinal, ClixRecord& out) {
   return true;
 }
 
+bool LibraryIndexFile::scanRecords(const RecordVisitor visitor, void* context) {
+  if (!opened || !visitor) return false;
+  constexpr uint16_t CHUNK_RECORDS = 32;
+  auto chunk = makeUniqueNoThrow<ClixRecord[]>(CHUNK_RECORDS);
+  if (!chunk) return false;
+  for (uint16_t base = 0; base < head.bookCount; base += CHUNK_RECORDS) {
+    const uint16_t batch = std::min<uint16_t>(CHUNK_RECORDS, head.bookCount - base);
+    if (!readAt(recordOffset(head, base), chunk.get(), batch * sizeof(ClixRecord))) return false;
+    for (uint16_t offset = 0; offset < batch; offset++) {
+      ClixRecord& record = chunk[offset];
+      record.foldLen = static_cast<uint8_t>(std::min<size_t>(record.foldLen, CLIX_FOLD_BYTES));
+      record.authorKeyLen = static_cast<uint8_t>(std::min<size_t>(record.authorKeyLen, CLIX_AUTHOR_KEY_BYTES));
+      if (record.metadataStatus > CLIX_METADATA_FAILED) {
+        readFailed = true;
+        return false;
+      }
+      if (!visitor(context, base + offset, record)) return true;
+    }
+  }
+  return true;
+}
+
 bool LibraryIndexFile::readName(const ClixRecord& record, std::string& out) {
   out.clear();
   if (!opened || record.nameLen == 0) return false;
-  if (record.nameOff > head.nameLen || sizeof(uint64_t) > head.nameLen - record.nameOff ||
-      record.nameLen > head.nameLen - record.nameOff - sizeof(uint64_t))
-    return false;
+  if (record.nameOff > head.nameLen || record.nameLen > head.nameLen - record.nameOff) return false;
   out.resize(record.nameLen);
-  return readAt(head.nameStart + record.nameOff + sizeof(uint64_t), out.data(), record.nameLen);
+  return readAt(head.nameStart + record.nameOff, out.data(), record.nameLen);
 }
 
 bool LibraryIndexFile::readPathHash(const ClixRecord& record, uint64_t& out) {
-  out = 0;
-  if (!opened) return false;
-  if (record.nameOff > head.nameLen || sizeof(out) > head.nameLen - record.nameOff) {
-    readFailed = true;
-    return false;
-  }
-  return readAt(head.nameStart + record.nameOff, &out, sizeof(out));
+  out = record.pathHash;
+  return opened;
 }
 
 bool LibraryIndexFile::readBlobField(const ClixRecord& record, const uint8_t field, std::string& out) {
   out.clear();
   if (!opened || record.nameLen == 0) return false;
-  if (record.nameOff > head.nameLen || sizeof(uint64_t) > head.nameLen - record.nameOff ||
-      record.nameLen > head.nameLen - record.nameOff - sizeof(uint64_t))
-    return false;
+  if (record.nameOff > head.nameLen || record.nameLen > head.nameLen - record.nameOff) return false;
 
-  uint32_t at = record.nameOff + sizeof(uint64_t) + record.nameLen;
+  uint32_t at = record.nameOff + record.nameLen;
   for (uint8_t i = 0; i <= field; i++) {
     if (at >= head.nameLen) return false;
     uint8_t len = 0;
@@ -231,32 +243,86 @@ bool LibraryIndexFile::readSourceAuthor(const ClixRecord& record, std::string& o
   return readBlobField(record, 2, out);
 }
 
-bool LibraryIndexFile::readPath(const ClixRecord& record, std::string& out) {
+bool LibraryIndexFile::readFolderPath(const uint16_t folderId, std::string& out) {
   out.clear();
-  if (!opened || record.folderId >= head.folderCount) return false;
+  if (!opened || folderId >= head.folderCount) return false;
 
   // Folder records are variable length, so reaching folder n means walking the
   // n preceding length bytes. At one seek per folder this is only done when a
   // book is opened or its details are shown, never while paging.
   uint32_t offset = head.folderStart;
   const uint32_t folderEnd = head.folderStart + head.folderLen;
-  for (uint16_t i = 0; i <= record.folderId; i++) {
+  for (uint16_t i = 0; i <= folderId; i++) {
     if (offset >= folderEnd) return false;
     uint8_t pathLen = 0;
     if (!readAt(offset, &pathLen, sizeof(pathLen)) || pathLen == 0) return false;
     if (pathLen > folderEnd - offset - 1u) return false;
-    if (i == record.folderId) {
-      std::string dir(pathLen, '\0');
-      if (!readAt(offset + 1, dir.data(), pathLen)) return false;
-      std::string name;
-      if (!readName(record, name)) return false;
-      out = joinLibraryPath(dir, name);
-      return true;
+    if (i == folderId) {
+      out.resize(pathLen);
+      return readAt(offset + 1, out.data(), pathLen);
     }
     offset += 1u + pathLen;
     if (offset >= folderEnd) return false;
   }
   return false;
+}
+
+bool LibraryIndexFile::readFolderPaths(const uint16_t* folderIds, const size_t count, std::string* outPaths) {
+  if (!opened || !folderIds || !outPaths || count == 0) return count == 0 && opened;
+  for (size_t index = 0; index < count; index++) {
+    outPaths[index].clear();
+    if (folderIds[index] >= head.folderCount || (index > 0 && folderIds[index] <= folderIds[index - 1])) return false;
+  }
+
+  constexpr size_t BUFFER_SIZE = 512;
+  auto buffer = makeUniqueNoThrow<uint8_t[]>(BUFFER_SIZE);
+  if (!buffer || !file.seekSet(head.folderStart)) return false;
+  const size_t folderEnd = head.folderStart + head.folderLen;
+  size_t absolute = head.folderStart;
+  size_t offset = 0;
+  size_t filled = 0;
+  const auto refill = [&]() {
+    if (absolute >= folderEnd) return false;
+    const size_t wanted = std::min(BUFFER_SIZE, folderEnd - absolute);
+    const int got = file.read(buffer.get(), wanted);
+    if (got <= 0) {
+      readFailed = true;
+      return false;
+    }
+    absolute += static_cast<size_t>(got);
+    offset = 0;
+    filled = static_cast<size_t>(got);
+    return true;
+  };
+  const auto getByte = [&](uint8_t& value) {
+    if (offset >= filled && !refill()) return false;
+    value = buffer[offset++];
+    return true;
+  };
+
+  size_t target = 0;
+  for (uint16_t folderId = 0; target < count; folderId++) {
+    uint8_t pathLength = 0;
+    if (!getByte(pathLength) || pathLength == 0) return false;
+    const bool wanted = folderId == folderIds[target];
+    if (wanted) outPaths[target].resize(pathLength);
+    for (uint8_t byte = 0; byte < pathLength; byte++) {
+      uint8_t value = 0;
+      if (!getByte(value)) return false;
+      if (wanted) outPaths[target][byte] = static_cast<char>(value);
+    }
+    if (wanted) target++;
+  }
+  return true;
+}
+
+bool LibraryIndexFile::readPath(const ClixRecord& record, std::string& out) {
+  std::string dir;
+  if (!readFolderPath(record.folderId, dir)) return false;
+  std::string name;
+  if (!readName(record, name)) return false;
+  out = joinLibraryPath(dir, name);
+  return true;
 }
 
 }  // namespace library

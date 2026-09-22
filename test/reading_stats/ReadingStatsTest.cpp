@@ -5,8 +5,10 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -218,6 +220,85 @@ TEST_F(StatsTest, FinishedPreviewKeepsNewestBooksWithoutLoadingFullHistory) {
   EXPECT_EQ(preview.front().rating, 0);
   EXPECT_EQ(preview.back().path, "/Books/book-2.epub");
   EXPECT_EQ(preview.back().rating, 2);
+}
+
+TEST_F(StatsTest, FinishedPreviewReadsOneBoundedPageAfterTheNewestBooks) {
+  auto& s = READING_STATS_STORE;
+  for (int i = 0; i < 16; i++) {
+    const std::string path = "/Books/book-" + std::to_string(i) + ".epub";
+    ASSERT_TRUE(s.setBookFinished(path, true));
+    ASSERT_TRUE(s.setBookRating(path, static_cast<uint8_t>(i % 5 + 1)));
+  }
+  ASSERT_TRUE(s.saveToFile());
+
+  std::vector<FinishedBookPreview> page;
+  uint16_t total = 0;
+  uint16_t rated = 0;
+  uint32_t ratingSum = 0;
+  ASSERT_TRUE(ReadingStatsStore::readFinishedPreviewFromFile(page, 6, total, rated, ratingSum, nullptr, nullptr, 6));
+
+  ASSERT_EQ(page.size(), 6u);
+  EXPECT_EQ(page.front().path, "/Books/book-9.epub");
+  EXPECT_EQ(page.back().path, "/Books/book-4.epub");
+  EXPECT_EQ(page.front().rating, 5);
+  EXPECT_EQ(total, 16);
+  EXPECT_EQ(rated, 16);
+}
+
+TEST_F(StatsTest, ExistingOnlyPreviewBackfillsPagesAndCountsOnlyPresentBooks) {
+  auto& s = READING_STATS_STORE;
+  for (int i = 0; i < 10; i++) {
+    const std::string path = "/Books/book-" + std::to_string(i) + ".epub";
+    ASSERT_TRUE(s.setBookFinished(path, true));
+    ASSERT_TRUE(s.setBookRating(path, 4));
+    if (i != 8 && i != 9) {
+      std::filesystem::create_directories(testRoot() + "/Books");
+      std::ofstream(testRoot() + path).put('x');
+    }
+  }
+  ASSERT_TRUE(s.saveToFile());
+
+  std::vector<FinishedBookPreview> page;
+  uint16_t total = 0;
+  uint16_t rated = 0;
+  uint32_t ratingSum = 0;
+  ASSERT_TRUE(
+      ReadingStatsStore::readFinishedPreviewFromFile(page, 6, total, rated, ratingSum, nullptr, nullptr, 0, true));
+
+  ASSERT_EQ(page.size(), 6u);
+  EXPECT_EQ(page.front().path, "/Books/book-7.epub");
+  EXPECT_EQ(page.back().path, "/Books/book-2.epub");
+  EXPECT_EQ(total, 8);
+  EXPECT_EQ(rated, 8);
+  EXPECT_EQ(ratingSum, 32u);
+}
+
+TEST_F(StatsTest, CatalogHashesReplaceRandomExistenceProbesForCompletedPaging) {
+  auto& s = READING_STATS_STORE;
+  for (int i = 0; i < 6; i++) ASSERT_TRUE(s.setBookFinished("/Books/book-" + std::to_string(i) + ".epub", true));
+  ASSERT_TRUE(s.saveToFile());
+
+  std::array<uint64_t, 3> catalog = {
+      ReadingStatsStore::finishedPathHash("/Books/book-1.epub"),
+      ReadingStatsStore::finishedPathHash("/Books/book-3.epub"),
+      ReadingStatsStore::finishedPathHash("/Books/book-5.epub"),
+  };
+  std::sort(catalog.begin(), catalog.end());
+  std::vector<FinishedBookPreview> page;
+  uint16_t total = 0;
+  uint16_t rated = 0;
+  uint32_t ratingSum = 0;
+  ASSERT_TRUE(ReadingStatsStore::readFinishedPreviewFromFile(page, 6, total, rated, ratingSum, nullptr, nullptr, 0,
+                                                             true, catalog.data(), catalog.size()));
+  ASSERT_EQ(page.size(), 3u);
+  EXPECT_EQ(page[0].path, "/Books/book-5.epub");
+  EXPECT_EQ(page[1].path, "/Books/book-3.epub");
+  EXPECT_EQ(page[2].path, "/Books/book-1.epub");
+  EXPECT_EQ(total, 3);
+}
+
+TEST_F(StatsTest, CompletionRejectsAPathTheReaderCannotPersist) {
+  EXPECT_FALSE(READING_STATS_STORE.setBookFinished("/" + std::string(501, 'x'), true));
 }
 
 TEST_F(StatsTest, FinishedPreviewMatchesAllCandidatesNotOnlyVisibleTail) {

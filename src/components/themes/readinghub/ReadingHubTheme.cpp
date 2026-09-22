@@ -11,6 +11,7 @@
 #include "components/UITheme.h"
 #include "components/icons/cover.h"
 #include "components/icons/folder.h"
+#include "components/themes/readinghub/ReadingHubLayout.h"
 #include "fontIds.h"
 
 namespace {
@@ -36,8 +37,14 @@ void drawChevron(const GfxRenderer& renderer, const int x, const int y, const bo
   renderer.drawLine(x + 1, y, x - 5, y + 6, black);
 }
 
+void drawCardFrame(const GfxRenderer& renderer, const int x, const int y, const int width, const int height,
+                   const bool selected, const bool drawWhenIdle = true) {
+  if (!selected && !drawWhenIdle) return;
+  renderer.drawRoundedRect(x, y, width, height, reading_hub::selectionBorderWidth(selected), CARD_RADIUS, true);
+}
+
 bool drawCover(const GfxRenderer& renderer, const RecentBook& book, const int x, const int y, const int width,
-               const int height, const bool selected) {
+               const int height) {
   renderer.fillRect(x, y, width, height, false);
   bool drawn = false;
   if (!book.coverBmpPath.empty()) {
@@ -45,7 +52,7 @@ bool drawCover(const GfxRenderer& renderer, const RecentBook& book, const int x,
     drawn = UITheme::drawCoverThumbFilled(const_cast<GfxRenderer&>(renderer), coverPath, x, y, width, height,
                                           /*allowRawDecode=*/false);
   }
-  renderer.drawRect(x, y, width, height, !selected);
+  renderer.drawRect(x, y, width, height, true);
   if (drawn) return true;
 
   renderer.drawIcon(CoverIcon, x + (width - 32) / 2, y + std::max(8, (height - 32) / 3), 32);
@@ -62,8 +69,6 @@ bool drawCover(const GfxRenderer& renderer, const RecentBook& book, const int x,
 
 void drawBookTile(const GfxRenderer& renderer, const RecentBook& book, const uint8_t rating, const int x, const int y,
                   const int width, const int height, const bool selected, const bool completed) {
-  if (selected) renderer.fillRect(x, y, width, height, true);
-
   // Completed cards always reserve title + series + rating rows. Their covers and metadata stay
   // aligned whether a particular book is unrated or is not part of a series.
   const int metadataHeight = completed ? completedTileMetadataHeight(renderer) : 42;
@@ -72,20 +77,18 @@ void drawBookTile(const GfxRenderer& renderer, const RecentBook& book, const uin
   const int coverHeight = cover.height;
   const int coverX = x + (width - coverWidth) / 2;
   const int coverY = y + TILE_PADDING;
-  drawCover(renderer, book, coverX, coverY, coverWidth, coverHeight, selected);
+  drawCover(renderer, book, coverX, coverY, coverWidth, coverHeight);
 
   if (completed) {
     constexpr int badgeSize = 20;
     const int badgeX = coverX + coverWidth - badgeSize - 4;
     const int badgeY = coverY + coverHeight - badgeSize - 4;
-    renderer.fillRoundedRect(badgeX, badgeY, badgeSize, badgeSize, badgeSize / 2,
-                             selected ? Color::White : Color::Black);
-    const bool markBlack = selected;
-    renderer.drawLine(badgeX + 5, badgeY + 10, badgeX + 9, badgeY + 14, 2, markBlack);
-    renderer.drawLine(badgeX + 9, badgeY + 14, badgeX + 16, badgeY + 6, 2, markBlack);
+    renderer.fillRoundedRect(badgeX, badgeY, badgeSize, badgeSize, badgeSize / 2, Color::Black);
+    renderer.drawLine(badgeX + 5, badgeY + 10, badgeX + 9, badgeY + 14, 2, false);
+    renderer.drawLine(badgeX + 9, badgeY + 14, badgeX + 16, badgeY + 6, 2, false);
   }
 
-  const bool ink = !selected;
+  const bool ink = reading_hub::selectionInkIsBlack(selected);
   const int textY = coverY + coverHeight + 5;
   const auto title = renderer.truncatedText(SMALL_FONT_ID, book.title.c_str(), coverWidth, EpdFontFamily::BOLD);
   renderer.drawText(SMALL_FONT_ID, coverX, textY, title.c_str(), ink, EpdFontFamily::BOLD);
@@ -102,6 +105,7 @@ void drawBookTile(const GfxRenderer& renderer, const RecentBook& book, const uin
     const int ratingY = textY + renderer.getLineHeight(SMALL_FONT_ID) * 2 + 1;
     book_tile::drawRatingStars(renderer, coverX, ratingY, rating, ink);
   }
+  drawCardFrame(renderer, x, y, width, height, selected, false);
 }
 
 void drawBookRow(const GfxRenderer& renderer, const Rect rect, const RecentBook* books, const uint8_t* ratings,
@@ -117,25 +121,48 @@ void drawBookRow(const GfxRenderer& renderer, const Rect rect, const RecentBook*
   }
 }
 
+void drawShelfRow(const GfxRenderer& renderer, const ReadingHubShelf& shelf, const int x, const int y, const int width,
+                  const int height, const bool selected) {
+  renderer.drawLine(x, y + height - 1, x + width, y + height - 1, true);
+
+  constexpr int coverWidth = 44;
+  const int coverHeight = std::min(66, height - 10);
+  const int coverY = y + (height - coverHeight) / 2;
+  bool coverDrawn = false;
+  if (!shelf.coverBmpPath.empty()) {
+    coverDrawn = UITheme::drawCoverThumbFilled(const_cast<GfxRenderer&>(renderer), shelf.coverBmpPath, x + 6, coverY,
+                                               coverWidth, coverHeight, false);
+  }
+  renderer.drawRect(x + 6, coverY, coverWidth, coverHeight, true);
+  if (!coverDrawn) renderer.drawIcon(FolderIcon, x + 12, coverY + std::max(3, (coverHeight - 32) / 2), 32);
+
+  const int textX = x + 64;
+  const auto title = renderer.truncatedText(UI_12_FONT_ID, shelf.name.c_str(), width - 104, EpdFontFamily::BOLD);
+  renderer.drawText(UI_12_FONT_ID, textX, y + 13, title.c_str(), true, EpdFontFamily::BOLD);
+  char count[40];
+  snprintf(count, sizeof(count), tr(STR_HUB_SHELF_BOOK_COUNT), static_cast<unsigned>(shelf.bookCount));
+  renderer.drawText(SMALL_FONT_ID, textX, y + 45, count);
+  drawChevron(renderer, x + width - 13, y + height / 2, true);
+  drawCardFrame(renderer, x, y, width, height, selected, false);
+}
+
 void drawNow(const GfxRenderer& renderer, const Rect rect, const ReadingHubScreen& screen) {
   renderer.drawText(UI_10_FONT_ID, rect.x, rect.y, tr(STR_CONTINUE_READING), true, EpdFontFamily::BOLD);
-  const int cardY = rect.y + renderer.getLineHeight(UI_10_FONT_ID) + 8;
-  const int cardHeight = std::min(286, rect.height * 45 / 100);
+  const int headingHeight = renderer.getLineHeight(UI_10_FONT_ID);
+  const reading_hub::NowLayout layout = reading_hub::makeNowLayout(rect.height, headingHeight);
+  const int cardY = rect.y + headingHeight + 8;
+  const int cardHeight = layout.continueCardHeight;
   const bool selected = screen.selectedIndex == 0;
-  if (selected) {
-    renderer.fillRoundedRect(rect.x, cardY, rect.width, cardHeight, CARD_RADIUS, Color::Black);
-  } else {
-    renderer.drawRoundedRect(rect.x, cardY, rect.width, cardHeight, 2, CARD_RADIUS, true);
-  }
+  drawCardFrame(renderer, rect.x, cardY, rect.width, cardHeight, selected);
 
   if (screen.currentBook) {
     const int coverHeight = cardHeight - 22;
     const int coverWidth = coverHeight * COVER_ASPECT_NUM / COVER_ASPECT_DEN;
-    drawCover(renderer, *screen.currentBook, rect.x + 11, cardY + 11, coverWidth, coverHeight, selected);
+    drawCover(renderer, *screen.currentBook, rect.x + 11, cardY + 11, coverWidth, coverHeight);
 
     const int textX = rect.x + coverWidth + 27;
     const int textWidth = rect.width - coverWidth - 40;
-    const bool ink = !selected;
+    const bool ink = reading_hub::selectionInkIsBlack(selected);
     const auto titleLines = renderer.wrappedText(NOTOSERIF_18_FONT_ID, screen.currentBook->title.c_str(), textWidth, 2,
                                                  EpdFontFamily::BOLD);
     int textY = cardY + 14;
@@ -170,22 +197,19 @@ void drawNow(const GfxRenderer& renderer, const Rect rect, const ReadingHubScree
     renderer.drawText(UI_10_FONT_ID, textX, cardY + cardHeight - 26, tr(STR_RESUME), ink, EpdFontFamily::BOLD);
   } else {
     UITheme::drawCenteredWrappedText(renderer, Rect{rect.x + 18, cardY + 18, rect.width - 36, cardHeight - 36},
-                                     UI_12_FONT_ID, tr(STR_NO_OPEN_BOOK), 2, !selected, EpdFontFamily::BOLD);
+                                     UI_12_FONT_ID, tr(STR_NO_OPEN_BOOK), 2, reading_hub::selectionInkIsBlack(selected),
+                                     EpdFontFamily::BOLD);
   }
 
-  const int queueY = cardY + cardHeight + 14;
-  const int queueHeight = 104;
+  const int queueY = cardY + cardHeight + 12;
+  const int queueHeight = layout.queueCardHeight;
   const bool queueSelected = screen.selectedIndex == 1;
-  if (queueSelected) {
-    renderer.fillRect(rect.x, queueY, rect.width, queueHeight, true);
-  } else {
-    renderer.drawRect(rect.x, queueY, rect.width, queueHeight, 2, true);
-  }
-  const bool queueInk = !queueSelected;
+  drawCardFrame(renderer, rect.x, queueY, rect.width, queueHeight, queueSelected);
+  const bool queueInk = reading_hub::selectionInkIsBlack(queueSelected);
   if (screen.nextBook) {
     const int coverHeight = queueHeight - 18;
     const int coverWidth = coverHeight * COVER_ASPECT_NUM / COVER_ASPECT_DEN;
-    drawCover(renderer, *screen.nextBook, rect.x + 10, queueY + 9, coverWidth, coverHeight, queueSelected);
+    drawCover(renderer, *screen.nextBook, rect.x + 10, queueY + 9, coverWidth, coverHeight);
     const int textX = rect.x + coverWidth + 24;
     renderer.drawText(SMALL_FONT_ID, textX, queueY + 9, tr(STR_HUB_UP_NEXT), queueInk, EpdFontFamily::BOLD);
     const auto title = renderer.truncatedText(UI_12_FONT_ID, screen.nextBook->title.c_str(),
@@ -202,7 +226,7 @@ void drawNow(const GfxRenderer& renderer, const Rect rect, const ReadingHubScree
   }
   drawChevron(renderer, rect.x + rect.width - 15, queueY + queueHeight / 2, queueInk);
 
-  const int completedY = queueY + queueHeight + 18;
+  const int completedY = queueY + queueHeight + 14;
   renderer.drawLine(rect.x, completedY, rect.x + rect.width, completedY, true);
   char completed[48];
   snprintf(completed, sizeof(completed), tr(STR_HUB_COMPLETED_COUNT), screen.completedTotalCount);
@@ -212,21 +236,20 @@ void drawNow(const GfxRenderer& renderer, const Rect rect, const ReadingHubScree
   renderer.drawText(SMALL_FONT_ID, rect.x + rect.width - completedWidth - 4, completedY + 15, completed, true);
 
   if (screen.completedBooks && screen.completedPreviewCount > 0) {
-    const int previewTop = completedY + 39;
-    const Rect preview{rect.x, previewTop, rect.width, std::max(1, rect.y + rect.height - previewTop)};
+    const int previewTop = completedY + 32;
+    const Rect preview{rect.x, previewTop, rect.width, layout.completedPreviewHeight};
     drawBookRow(renderer, preview, screen.completedBooks, screen.completedRatings, 0,
                 std::min(GRID_COLUMNS, screen.completedPreviewCount), 0, -1, true);
   } else {
     renderer.drawText(SMALL_FONT_ID, rect.x + 4, completedY + 48, tr(STR_NO_COMPLETED_BOOKS));
   }
-  if (screen.selectedIndex == 2) {
-    renderer.invertRect(rect.x, completedY + 5, rect.width, rect.y + rect.height - completedY - 5);
-  }
+  drawCardFrame(renderer, rect.x, completedY + 4, rect.width, rect.y + rect.height - completedY - 4,
+                screen.selectedIndex == 2, false);
 }
 
 void drawLibrary(const GfxRenderer& renderer, const Rect rect, const ReadingHubScreen& screen) {
   renderer.drawText(UI_10_FONT_ID, rect.x, rect.y, tr(STR_HUB_YOUR_SHELVES), true, EpdFontFamily::BOLD);
-  if (screen.shelfSummaryAvailable) {
+  if (screen.libraryCountKnown) {
     char libraryStatus[48];
     snprintf(libraryStatus, sizeof(libraryStatus), tr(STR_HUB_LIBRARY_COUNT),
              static_cast<unsigned>(screen.libraryTotalCount));
@@ -235,15 +258,12 @@ void drawLibrary(const GfxRenderer& renderer, const Rect rect, const ReadingHubS
   }
 
   if (!screen.shelves || screen.shelfPreviewCount <= 0) {
-    const bool selected = screen.selectedIndex == 0;
     const int emptyY = rect.y + 48;
-    renderer.drawRoundedRect(rect.x, emptyY, rect.width, 86, 2, CARD_RADIUS, true);
+    drawCardFrame(renderer, rect.x, emptyY, rect.width, 86, false);
     renderer.drawIcon(FolderIcon, rect.x + 16, emptyY + 27, 32);
-    renderer.drawText(UI_12_FONT_ID, rect.x + 62, emptyY + 19, tr(STR_HUB_OPEN_LIBRARY), true, EpdFontFamily::BOLD);
-    const char* detail = screen.shelfSummaryAvailable ? tr(STR_NO_ACTIVE_BOOKS) : tr(STR_HUB_SHELF_SUMMARY_UNAVAILABLE);
-    renderer.drawText(SMALL_FONT_ID, rect.x + 62, emptyY + 51, detail);
-    drawChevron(renderer, rect.x + rect.width - 16, emptyY + 43, true);
-    if (selected) renderer.invertRect(rect.x, emptyY, rect.width, 86);
+    const char* title = screen.shelfSummaryAvailable ? tr(STR_NO_ACTIVE_BOOKS) : tr(STR_LIBRARY_REBUILD_FAILED);
+    renderer.drawText(UI_12_FONT_ID, rect.x + 62, emptyY + 19, title, true, EpdFontFamily::BOLD);
+    renderer.drawText(SMALL_FONT_ID, rect.x + 62, emptyY + 51, tr(STR_LIBRARY_EMPTY));
     return;
   }
 
@@ -254,34 +274,13 @@ void drawLibrary(const GfxRenderer& renderer, const Rect rect, const ReadingHubS
   for (int index = 0; index < screen.shelfPreviewCount; index++) {
     const auto& shelf = screen.shelves[index];
     const int y = top + index * rowHeight;
-    const bool selected = screen.selectedIndex == index;
-    renderer.drawLine(rect.x, y + rowHeight - 1, rect.x + rect.width, y + rowHeight - 1, true);
-
-    constexpr int coverWidth = 44;
-    const int coverHeight = std::min(66, rowHeight - 10);
-    const int coverY = y + (rowHeight - coverHeight) / 2;
-    bool coverDrawn = false;
-    if (!shelf.coverBmpPath.empty()) {
-      coverDrawn = UITheme::drawCoverThumbFilled(const_cast<GfxRenderer&>(renderer), shelf.coverBmpPath, rect.x + 6,
-                                                 coverY, coverWidth, coverHeight, false);
-    }
-    renderer.drawRect(rect.x + 6, coverY, coverWidth, coverHeight, true);
-    if (!coverDrawn) renderer.drawIcon(FolderIcon, rect.x + 12, coverY + std::max(3, (coverHeight - 32) / 2), 32);
-
-    const int textX = rect.x + 64;
-    const auto title = renderer.truncatedText(UI_12_FONT_ID, shelf.name.c_str(), rect.width - 104, EpdFontFamily::BOLD);
-    renderer.drawText(UI_12_FONT_ID, textX, y + 13, title.c_str(), true, EpdFontFamily::BOLD);
-    char count[40];
-    snprintf(count, sizeof(count), tr(STR_HUB_SHELF_BOOK_COUNT), static_cast<unsigned>(shelf.bookCount));
-    renderer.drawText(SMALL_FONT_ID, textX, y + 45, count);
-    drawChevron(renderer, rect.x + rect.width - 13, y + rowHeight / 2, true);
-    if (selected) renderer.invertRect(rect.x, y, rect.width, rowHeight);
+    drawShelfRow(renderer, shelf, rect.x, y, rect.width, rowHeight, screen.selectedIndex == index);
   }
   if (!hasAllRow) return;
   const int y = top + screen.shelfPreviewCount * rowHeight;
   renderer.drawText(UI_12_FONT_ID, rect.x + 16, y + 17, tr(STR_HUB_SHOW_ALL_SHELVES), true, EpdFontFamily::BOLD);
   drawChevron(renderer, rect.x + rect.width - 13, y + rowHeight / 2, true);
-  if (screen.selectedIndex == screen.shelfPreviewCount) renderer.invertRect(rect.x, y, rect.width, rowHeight);
+  drawCardFrame(renderer, rect.x, y, rect.width, rowHeight, screen.selectedIndex == screen.shelfPreviewCount, false);
 }
 
 void drawQueue(const GfxRenderer& renderer, const Rect rect, const ReadingHubScreen& screen) {
@@ -303,33 +302,32 @@ void drawQueue(const GfxRenderer& renderer, const Rect rect, const ReadingHubScr
   for (int index = 0; index < screen.queuePreviewCount; index++) {
     const int y = top + index * rowHeight;
     const bool selected = index == screen.selectedIndex;
-    if (selected) renderer.fillRect(rect.x, y, rect.width, rowHeight, true);
-    renderer.drawLine(rect.x, y, rect.x + rect.width, y, !selected);
+    renderer.drawLine(rect.x, y, rect.x + rect.width, y, true);
     if (index + 1 == screen.queuePreviewCount) {
-      renderer.drawLine(rect.x, y + rowHeight - 1, rect.x + rect.width, y + rowHeight - 1, !selected);
+      renderer.drawLine(rect.x, y + rowHeight - 1, rect.x + rect.width, y + rowHeight - 1, true);
     }
 
     char rank[4];
     snprintf(rank, sizeof(rank), "%02d", index + 1);
-    renderer.drawText(UI_12_FONT_ID, rect.x + 7, y + rowHeight / 2 - 12, rank, !selected, EpdFontFamily::BOLD);
+    renderer.drawText(UI_12_FONT_ID, rect.x + 7, y + rowHeight / 2 - 12, rank, true, EpdFontFamily::BOLD);
 
     const int coverHeight = rowHeight - 16;
     const int coverWidth = coverHeight * COVER_ASPECT_NUM / COVER_ASPECT_DEN;
     const int coverX = rect.x + 48;
-    drawCover(renderer, screen.queueBooks[index], coverX, y + 8, coverWidth, coverHeight, selected);
+    drawCover(renderer, screen.queueBooks[index], coverX, y + 8, coverWidth, coverHeight);
     const int textX = coverX + coverWidth + 13;
     const int textWidth = rect.width - (textX - rect.x) - 28;
     const auto title =
         renderer.truncatedText(UI_12_FONT_ID, screen.queueBooks[index].title.c_str(), textWidth, EpdFontFamily::BOLD);
-    renderer.drawText(UI_12_FONT_ID, textX, y + 20, title.c_str(), !selected, EpdFontFamily::BOLD);
+    renderer.drawText(UI_12_FONT_ID, textX, y + 20, title.c_str(), true, EpdFontFamily::BOLD);
     char series[96];
     book_tile::formatSeriesLabel(screen.queueBooks[index].series, screen.queueBooks[index].seriesPosition, series,
                                  sizeof(series));
     const char* subtitleText = series[0] == '\0' ? screen.queueBooks[index].author.c_str() : series;
     const auto subtitle = renderer.truncatedText(SMALL_FONT_ID, subtitleText, textWidth);
-    renderer.drawText(SMALL_FONT_ID, textX, y + 53, subtitle.c_str(), !selected);
-    renderer.drawText(UI_12_FONT_ID, rect.x + rect.width - 20, y + rowHeight / 2 - 12, "=", !selected,
-                      EpdFontFamily::BOLD);
+    renderer.drawText(SMALL_FONT_ID, textX, y + 53, subtitle.c_str(), true);
+    renderer.drawText(UI_12_FONT_ID, rect.x + rect.width - 20, y + rowHeight / 2 - 12, "=", true, EpdFontFamily::BOLD);
+    drawCardFrame(renderer, rect.x, y, rect.width, rowHeight, selected, false);
   }
 }
 
@@ -388,12 +386,61 @@ void drawRead(const GfxRenderer& renderer, const Rect rect, const ReadingHubScre
     }
   }
 
-  renderer.drawRoundedRect(rect.x, showAllY, rect.width, showAllHeight, 2, CARD_RADIUS, true);
+  drawCardFrame(renderer, rect.x, showAllY, rect.width, showAllHeight,
+                screen.selectedIndex == screen.completedPreviewCount);
   renderer.drawText(UI_12_FONT_ID, rect.x + 15, showAllY + 12, tr(STR_HUB_SHOW_ALL_COMPLETED), true,
                     EpdFontFamily::BOLD);
   drawChevron(renderer, rect.x + rect.width - 14, showAllY + showAllHeight / 2, true);
-  if (screen.selectedIndex == screen.completedPreviewCount) {
-    renderer.invertRect(rect.x, showAllY, rect.width, showAllHeight);
+}
+
+void drawCollection(const GfxRenderer& renderer, const Rect rect, const ReadingHubScreen& screen) {
+  char pageLabel[24];
+  snprintf(pageLabel, sizeof(pageLabel), "%d / %d", screen.collectionPageNumber + 1,
+           std::max(1, screen.collectionPageCount));
+  const int labelWidth = renderer.getTextWidth(SMALL_FONT_ID, pageLabel);
+  renderer.drawText(SMALL_FONT_ID, rect.x + rect.width - labelWidth, rect.y + 2, pageLabel, true, EpdFontFamily::BOLD);
+  renderer.drawLine(rect.x, rect.y + 25, rect.x + rect.width, rect.y + 25, true);
+
+  if (screen.page == reading_hub::Page::ALL_SHELVES) {
+    if (!screen.collectionShelves || screen.collectionShelfCount <= 0) {
+      UITheme::drawCenteredWrappedText(renderer, Rect{rect.x + 20, rect.y + 70, rect.width - 40, rect.height - 100},
+                                       UI_12_FONT_ID, tr(STR_NO_ACTIVE_BOOKS), 3, true, EpdFontFamily::BOLD);
+      return;
+    }
+    const int top = rect.y + 32;
+    const int rowHeight = std::min(88, std::max(64, (rect.height - 32) / screen.collectionShelfCount));
+    for (int index = 0; index < screen.collectionShelfCount; index++) {
+      drawShelfRow(renderer, screen.collectionShelves[index], rect.x, top + index * rowHeight, rect.width, rowHeight,
+                   screen.collectionSelectedIndex == index);
+    }
+    return;
+  }
+
+  if (!screen.collectionBooks || screen.collectionBookCount <= 0) {
+    const char* message =
+        screen.page == reading_hub::Page::COMPLETED_BOOKS ? tr(STR_NO_COMPLETED_BOOKS) : tr(STR_NO_ACTIVE_BOOKS);
+    UITheme::drawCenteredWrappedText(renderer, Rect{rect.x + 20, rect.y + 70, rect.width - 40, rect.height - 100},
+                                     UI_12_FONT_ID, message, 3, true, EpdFontFamily::BOLD);
+    return;
+  }
+
+  const bool completed = screen.page == reading_hub::Page::COMPLETED_BOOKS;
+  const int firstCount = std::min(GRID_COLUMNS, screen.collectionBookCount);
+  const int gridTop = rect.y + 34;
+  constexpr int rowGap = 12;
+  const int rowCount = screen.collectionBookCount > GRID_COLUMNS ? 2 : 1;
+  const int availableRowHeight = std::max(1, (rect.height - 34 - (rowCount - 1) * rowGap) / rowCount);
+  const int cellWidth = (rect.width - GRID_GAP * (GRID_COLUMNS - 1)) / GRID_COLUMNS;
+  const int metadataHeight = completed ? completedTileMetadataHeight(renderer) : 42;
+  const int naturalHeight = cellWidth * COVER_ASPECT_DEN / COVER_ASPECT_NUM + metadataHeight;
+  const int rowHeight = std::min(availableRowHeight, naturalHeight);
+  drawBookRow(renderer, Rect{rect.x, gridTop, rect.width, rowHeight}, screen.collectionBooks, screen.collectionRatings,
+              0, firstCount, 0, screen.collectionSelectedIndex, completed);
+  const int remaining = screen.collectionBookCount - firstCount;
+  if (remaining > 0) {
+    drawBookRow(renderer, Rect{rect.x, gridTop + rowHeight + rowGap, rect.width, rowHeight}, screen.collectionBooks,
+                screen.collectionRatings, firstCount, std::min(GRID_COLUMNS, remaining), 0,
+                screen.collectionSelectedIndex, completed);
   }
 }
 }  // namespace
@@ -401,6 +448,10 @@ void drawRead(const GfxRenderer& renderer, const Rect rect, const ReadingHubScre
 void ReadingHubTheme::drawReadingHubScreen(const GfxRenderer& renderer, const Rect rect,
                                            const ReadingHubScreen& screen) const {
   if (rect.width <= 0 || rect.height <= 0) return;
+  if (screen.page != reading_hub::Page::ROOT) {
+    drawCollection(renderer, rect, screen);
+    return;
+  }
   switch (screen.section) {
     case 0:
       drawNow(renderer, rect, screen);

@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "components/ReadingHubModel.h"
+
 class GfxRenderer;
 struct RecentBook;
 
@@ -160,12 +162,17 @@ enum class RootExperience : uint8_t { LEGACY_HOME = 0, READING_HUB = 1 };
 struct ReadingHubShelf {
   std::string path;
   std::string name;
+  // Representative book behind the shelf art. Kept separate from the resolved BMP so the Hub's
+  // idle worker can create a missing thumbnail without reopening or materialising the shelf.
+  std::string coverBookPath;
   std::string coverBmpPath;
+  uint16_t catalogId = UINT16_MAX;
   uint16_t bookCount = 0;
   bool completed = false;
 };
 
 struct ReadingHubScreen {
+  reading_hub::Page page = reading_hub::Page::ROOT;
   uint8_t section = 0;
   int selectedIndex = 0;
   const RecentBook* currentBook = nullptr;
@@ -175,6 +182,7 @@ struct ReadingHubScreen {
   int shelfPreviewCount = 0;
   int shelfTotalCount = 0;
   bool shelfSummaryAvailable = true;
+  bool libraryCountKnown = false;
   int libraryTotalCount = 0;
   const RecentBook* queueBooks = nullptr;
   int queuePreviewCount = 0;
@@ -185,6 +193,14 @@ struct ReadingHubScreen {
   int completedTotalCount = 0;
   int ratedBookCount = 0;
   int averageRatingTenths = 0;
+  const RecentBook* collectionBooks = nullptr;
+  const uint8_t* collectionRatings = nullptr;
+  int collectionBookCount = 0;
+  const ReadingHubShelf* collectionShelves = nullptr;
+  int collectionShelfCount = 0;
+  int collectionSelectedIndex = 0;
+  int collectionPageNumber = 0;
+  int collectionPageCount = 1;
 };
 
 // Default theme implementation (Classic Theme)

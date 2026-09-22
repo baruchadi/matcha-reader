@@ -1,6 +1,7 @@
 #include "ReadingStatsStore.h"
 
 #include <HalStorage.h>
+#include <LibraryFormat.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <SdSystemDir.h>
@@ -322,10 +323,10 @@ bool ReadingStatsStore::isBookFinished(const std::string& bookPath) const {
 }
 
 bool ReadingStatsStore::setBookFinished(const std::string& bookPath, const bool finished) {
-  if (bookPath.empty()) return false;
+  if (bookPath.empty() || bookPath.size() > MAX_PERSISTED_PATH_BYTES) return false;
   const auto it = std::find(finishedBookPaths.begin(), finishedBookPaths.end(), bookPath);
   if (finished) {
-    if (it != finishedBookPaths.end() || finishedBookPaths.size() >= 500) return false;
+    if (it != finishedBookPaths.end() || finishedBookPaths.size() >= MAX_FINISHED_BOOKS) return false;
     finishedBookPaths.push_back(bookPath);
     finishedBookRatings.push_back(0);
   } else {
@@ -420,12 +421,7 @@ bool ReadingStatsStore::readFinishedCountFromFile(uint16_t& outCount) {
 }
 
 uint64_t ReadingStatsStore::finishedPathHash(const std::string_view path) {
-  uint64_t hash = 14695981039346656037ULL;  // FNV-1a 64, also used by the library index.
-  for (const unsigned char value : path) {
-    hash ^= value;
-    hash *= 1099511628211ULL;
-  }
-  return hash;
+  return library::clixPathHash(path.data(), path.size());
 }
 
 bool ReadingStatsStore::readFinishedPathHashesFromFile(std::unique_ptr<uint64_t[]>& outHashes, uint16_t& outCount) {
@@ -453,7 +449,7 @@ bool ReadingStatsStore::readFinishedPathHashesFromFile(std::unique_ptr<uint64_t[
   }
 
   uint16_t pathCount = 0;
-  if (f.read(reinterpret_cast<uint8_t*>(&pathCount), 2) != 2 || pathCount > 500) {
+  if (f.read(reinterpret_cast<uint8_t*>(&pathCount), 2) != 2 || pathCount > MAX_FINISHED_BOOKS) {
     return fail();
   }
   // The path block is authoritative. Older builds could preserve a lifetime/high-water count in
@@ -467,15 +463,14 @@ bool ReadingStatsStore::readFinishedPathHashesFromFile(std::unique_ptr<uint64_t[
   uint8_t chunk[64];
   for (uint16_t index = 0; index < pathCount; index++) {
     uint16_t pathLength = 0;
-    if (f.read(reinterpret_cast<uint8_t*>(&pathLength), 2) != 2 || pathLength > 500) return fail();
+    if (f.read(reinterpret_cast<uint8_t*>(&pathLength), 2) != 2 || pathLength > MAX_PERSISTED_PATH_BYTES) return fail();
     uint64_t hash = 14695981039346656037ULL;
     size_t remaining = pathLength;
     while (remaining > 0) {
       const size_t bytes = std::min(remaining, sizeof(chunk));
       if (f.read(chunk, bytes) != bytes) return fail();
       for (size_t offset = 0; offset < bytes; offset++) {
-        hash ^= chunk[offset];
-        hash *= 1099511628211ULL;
+        hash = library::clixPathHashByte(hash, chunk[offset]);
       }
       remaining -= bytes;
     }
@@ -491,12 +486,14 @@ bool ReadingStatsStore::readFinishedPathHashesFromFile(std::unique_ptr<uint64_t[
 bool ReadingStatsStore::readFinishedPreviewFromFile(std::vector<FinishedBookPreview>& out, const size_t maxBooks,
                                                     uint16_t& outTotal, uint16_t& outRatedCount, uint32_t& outRatingSum,
                                                     const std::vector<std::string>* membershipCandidates,
-                                                    std::vector<uint8_t>* outMembership) {
+                                                    std::vector<uint8_t>* outMembership, const size_t newestOffset,
+                                                    const bool existingOnly, const uint64_t* existingPathHashes,
+                                                    const size_t existingPathHashCount) {
   out.clear();
   outTotal = 0;
   outRatedCount = 0;
   outRatingSum = 0;
-  out.reserve(std::min<size_t>(maxBooks, 500));
+  out.reserve(std::min<size_t>(maxBooks, MAX_FINISHED_BOOKS));
   if (outMembership) {
     outMembership->assign(membershipCandidates ? membershipCandidates->size() : 0, 0);
   }
@@ -514,16 +511,71 @@ bool ReadingStatsStore::readFinishedPreviewFromFile(std::vector<FinishedBookPrev
   if (!skipBytes(f, static_cast<size_t>(dayCount) * sizeof(DailyReading))) return false;
 
   uint16_t pathCount = 0;
-  if (f.read(reinterpret_cast<uint8_t*>(&pathCount), 2) != 2 || pathCount > 500) return false;
+  if (f.read(reinterpret_cast<uint8_t*>(&pathCount), 2) != 2 || pathCount > MAX_FINISHED_BOOKS) return false;
   // Paths may be 500 bytes, above the firmware's per-function stack budget. One bounded nothrow
   // allocation per Hub load is safer than a 501-byte stack frame and is reused for every record.
-  auto pathBuffer = makeUniqueNoThrow<char[]>(501);
+  auto pathBuffer = makeUniqueNoThrow<char[]>(MAX_PERSISTED_PATH_BYTES + 1);
   if (!pathBuffer) return false;
+
+  std::unique_ptr<uint8_t[]> existingBits;
+  size_t existingCount = pathCount;
+  if (existingOnly && pathCount > 0) {
+    const size_t bitBytes = (pathCount + 7u) / 8u;
+    existingBits = makeUniqueNoThrow<uint8_t[]>(bitBytes);
+    if (!existingBits) return false;
+    memset(existingBits.get(), 0, bitBytes);
+    existingCount = 0;
+    const bool inspectMembership = membershipCandidates && outMembership && !membershipCandidates->empty();
+    for (uint16_t index = 0; index < pathCount; index++) {
+      uint16_t pathLength = 0;
+      if (f.read(reinterpret_cast<uint8_t*>(&pathLength), 2) != 2 || pathLength > MAX_PERSISTED_PATH_BYTES ||
+          (pathLength > 0 && f.read(reinterpret_cast<uint8_t*>(pathBuffer.get()), pathLength) != pathLength)) {
+        return false;
+      }
+      pathBuffer[pathLength] = '\0';
+      if (inspectMembership) {
+        for (size_t candidate = 0; candidate < membershipCandidates->size(); candidate++) {
+          const auto& value = (*membershipCandidates)[candidate];
+          if (value.size() == pathLength && memcmp(value.data(), pathBuffer.get(), pathLength) == 0) {
+            (*outMembership)[candidate] = 1;
+          }
+        }
+      }
+      const bool exists = existingPathHashes
+                              ? std::binary_search(existingPathHashes, existingPathHashes + existingPathHashCount,
+                                                   finishedPathHash(std::string_view{pathBuffer.get(), pathLength}))
+                              : Storage.exists(pathBuffer.get());
+      if (exists) {
+        existingBits[index / 8u] |= static_cast<uint8_t>(1u << (index % 8u));
+        existingCount++;
+      }
+    }
+    f.close();
+    if (!Storage.openFileForRead("STAT", statsPath().c_str(), f)) return false;
+    uint8_t secondVersion = 0;
+    uint16_t secondDayCount = 0;
+    uint16_t secondStoredTotal = 0;
+    uint16_t secondPathCount = 0;
+    if (f.read(&secondVersion, 1) != 1 || f.read(reinterpret_cast<uint8_t*>(&secondDayCount), 2) != 2 ||
+        secondVersion != version || secondDayCount != dayCount ||
+        f.read(reinterpret_cast<uint8_t*>(&secondStoredTotal), 2) != 2 || secondStoredTotal != outTotal ||
+        !skipBytes(f, static_cast<size_t>(secondDayCount) * sizeof(DailyReading)) ||
+        f.read(reinterpret_cast<uint8_t*>(&secondPathCount), 2) != 2 || secondPathCount != pathCount) {
+      return false;
+    }
+  }
+
+  const size_t retainedEnd = existingCount > newestOffset ? existingCount - newestOffset : 0;
+  const size_t retainedStart = retainedEnd > maxBooks ? retainedEnd - maxBooks : 0;
+  size_t existingOrdinal = 0;
   for (uint16_t index = 0; index < pathCount; index++) {
     uint16_t pathLength = 0;
-    if (f.read(reinterpret_cast<uint8_t*>(&pathLength), 2) != 2 || pathLength > 500) return false;
-    const bool keep = maxBooks > 0 && index + maxBooks >= pathCount;
-    const bool inspectMembership = membershipCandidates && outMembership && !membershipCandidates->empty();
+    if (f.read(reinterpret_cast<uint8_t*>(&pathLength), 2) != 2 || pathLength > MAX_PERSISTED_PATH_BYTES) return false;
+    const bool exists = !existingOnly || (existingBits[index / 8u] & (1u << (index % 8u))) != 0;
+    const size_t candidateOrdinal = existingOnly ? existingOrdinal : index;
+    const bool keep = exists && candidateOrdinal >= retainedStart && candidateOrdinal < retainedEnd;
+    const bool inspectMembership =
+        !existingOnly && membershipCandidates && outMembership && !membershipCandidates->empty();
     if (keep || inspectMembership) {
       if (pathLength > 0 && f.read(reinterpret_cast<uint8_t*>(pathBuffer.get()), pathLength) != pathLength) {
         return false;
@@ -545,6 +597,7 @@ bool ReadingStatsStore::readFinishedPreviewFromFile(std::vector<FinishedBookPrev
     } else if (!inspectMembership && !skipBytes(f, pathLength)) {
       return false;
     }
+    if (exists) existingOrdinal++;
   }
 
   // The path block is the authoritative completion record. Optional blocks written after it can
@@ -555,7 +608,7 @@ bool ReadingStatsStore::readFinishedPreviewFromFile(std::vector<FinishedBookPrev
     outRatingSum = 0;
     for (auto& preview : out) preview.rating = 0;
     std::reverse(out.begin(), out.end());
-    outTotal = pathCount;
+    outTotal = static_cast<uint16_t>(existingCount);
     return true;
   };
 
@@ -567,8 +620,8 @@ bool ReadingStatsStore::readFinishedPreviewFromFile(std::vector<FinishedBookPrev
     for (uint16_t index = 0; index < bookCount; index++) {
       uint16_t pathLength = 0;
       uint8_t languageLength = 0;
-      if (f.read(reinterpret_cast<uint8_t*>(&pathLength), 2) != 2 || pathLength > 500 || !skipBytes(f, pathLength) ||
-          f.read(&languageLength, 1) != 1 || languageLength > MAX_STORED_LANGUAGE ||
+      if (f.read(reinterpret_cast<uint8_t*>(&pathLength), 2) != 2 || pathLength > MAX_PERSISTED_PATH_BYTES ||
+          !skipBytes(f, pathLength) || f.read(&languageLength, 1) != 1 || languageLength > MAX_STORED_LANGUAGE ||
           !skipBytes(f, static_cast<size_t>(languageLength) + 8)) {
         return finishWithoutRatings();
       }
@@ -588,20 +641,26 @@ bool ReadingStatsStore::readFinishedPreviewFromFile(std::vector<FinishedBookPrev
     if (f.read(reinterpret_cast<uint8_t*>(&ratingCount), 2) != 2 || ratingCount != pathCount) {
       return finishWithoutRatings();
     }
-    const size_t retainedStart = pathCount - out.size();
+    existingOrdinal = 0;
     for (uint16_t index = 0; index < ratingCount; index++) {
       uint8_t rating = 0;
       if (f.read(&rating, 1) != 1 || rating > 5) return finishWithoutRatings();
-      if (rating > 0) {
+      const bool exists = !existingOnly || (existingBits[index / 8u] & (1u << (index % 8u))) != 0;
+      if (exists && rating > 0) {
         outRatedCount++;
         outRatingSum += rating;
       }
-      if (index >= retainedStart) out[index - retainedStart].rating = rating;
+      if (!exists) continue;
+      const size_t ratingOrdinal = existingOnly ? existingOrdinal : index;
+      if (ratingOrdinal >= retainedStart && ratingOrdinal < retainedEnd) {
+        out[ratingOrdinal - retainedStart].rating = rating;
+      }
+      if (existingOnly) existingOrdinal++;
     }
   }
 
   std::reverse(out.begin(), out.end());
-  outTotal = pathCount;
+  outTotal = static_cast<uint16_t>(existingCount);
   return true;
 }
 

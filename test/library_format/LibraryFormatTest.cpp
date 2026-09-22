@@ -30,7 +30,7 @@ TEST(LibraryFormat, StructSizesAreFrozen) {
   EXPECT_EQ(sizeof(ClixHeader), 64u);
   EXPECT_EQ(sizeof(ClixRecord), 128u);
   EXPECT_EQ(sizeof(ClixFolderHeader), 1u);
-  EXPECT_EQ(CLIX_FORMAT_VERSION, 2u);
+  EXPECT_EQ(CLIX_FORMAT_VERSION, 3u);
 }
 
 TEST(LibraryFormat, RecordsTileSectorsExactly) {
@@ -191,7 +191,8 @@ TEST(LibraryFormat, ByteImageIsStableAcrossBuilds) {
   EXPECT_EQ(offsetof(ClixRecord, authorKeyLen), 14u);
   EXPECT_EQ(offsetof(ClixRecord, metadataStatus), 15u);
   EXPECT_EQ(offsetof(ClixRecord, fold), 16u);
-  EXPECT_EQ(offsetof(ClixRecord, authorKey), 112u);
+  EXPECT_EQ(offsetof(ClixRecord, authorKey), 104u);
+  EXPECT_EQ(offsetof(ClixRecord, pathHash), 116u);
   EXPECT_EQ(offsetof(ClixRecord, modificationTime), 124u);
 
   EXPECT_EQ(offsetof(ClixHeader, metadataEnabled), 7u);

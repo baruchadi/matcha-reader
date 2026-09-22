@@ -16,12 +16,7 @@ std::string joinLibraryPath(const std::string_view folder, const std::string_vie
 
 namespace {
 
-std::vector<uint8_t> makeBlob(const uint64_t pathHash, const std::initializer_list<uint8_t> fields) {
-  std::vector<uint8_t> blob(sizeof(pathHash) + fields.size());
-  std::memcpy(blob.data(), &pathHash, sizeof(pathHash));
-  std::copy(fields.begin(), fields.end(), blob.begin() + sizeof(pathHash));
-  return blob;
-}
+std::vector<uint8_t> makeBlob(const std::initializer_list<uint8_t> fields) { return std::vector<uint8_t>(fields); }
 
 }  // namespace
 
@@ -76,8 +71,7 @@ TEST(LibraryIndexFile, ResolvesRecentRowsByIdentity) {
   header.formatVersion = library::CLIX_FORMAT_VERSION;
   header.foldVersion = library::CLIX_FOLD_VERSION;
   header.bookCount = 3;
-  // One 8-byte path hash blob per record.
-  library::layoutSections(header, 0, 3 * sizeof(uint64_t));
+  library::layoutSections(header, 0, 0);
   std::vector<uint8_t> bytes(header.selfSize, 0);
   std::memcpy(bytes.data(), &header, sizeof(header));
 
@@ -87,9 +81,8 @@ TEST(LibraryIndexFile, ResolvesRecentRowsByIdentity) {
   for (uint16_t ordinal = 0; ordinal < 3; ordinal++) {
     library::ClixRecord record{};
     record.fileSize = SIZES[ordinal];
-    record.nameOff = ordinal * sizeof(uint64_t);
+    record.pathHash = HASHES[ordinal];
     std::memcpy(bytes.data() + library::recordOffset(header, ordinal), &record, sizeof(record));
-    std::memcpy(bytes.data() + header.nameStart + record.nameOff, &HASHES[ordinal], sizeof(uint64_t));
   }
   const uint16_t arrivalOrder[] = {1, 2, 0};
   std::memcpy(bytes.data() + library::arrivalOrderOffset(header, 0), arrivalOrder, sizeof(arrivalOrder));
@@ -139,7 +132,7 @@ TEST(LibraryIndexFile, ReadsPathHashAndEveryPublicBlobField) {
   header.bookCount = 1;
   const uint8_t folder[] = {6, '/', 'b', 'o', 'o', 'k', 's'};
   constexpr uint64_t PATH_HASH = 0x0123456789ABCDEFULL;
-  const auto blob = makeBlob(PATH_HASH, {'x', 1, 'a', 1, 't', 8, 'O', 'r', 'i', 'g', 'i', 'n', 'a', 'l'});
+  const auto blob = makeBlob({'x', 1, 'a', 1, 't', 8, 'O', 'r', 'i', 'g', 'i', 'n', 'a', 'l'});
   header.folderCount = 1;
   library::layoutSections(header, sizeof(folder), blob.size());
   std::vector<uint8_t> bytes(header.selfSize, 0);
@@ -148,6 +141,7 @@ TEST(LibraryIndexFile, ReadsPathHashAndEveryPublicBlobField) {
   std::memcpy(bytes.data() + header.nameStart, blob.data(), blob.size());
   library::ClixRecord record{};
   record.nameLen = 1;
+  record.pathHash = PATH_HASH;
   Storage.setFile("/library.clx", bytes);
 
   library::LibraryIndexFile index;
@@ -169,21 +163,25 @@ TEST(LibraryIndexFile, ReadsPathHashAndEveryPublicBlobField) {
   std::string path;
   ASSERT_TRUE(index.readPath(record, path));
   EXPECT_EQ(path, "/books/x");
+  const uint16_t folderIds[] = {0};
+  std::string folderPaths[1];
+  ASSERT_TRUE(index.readFolderPaths(folderIds, 1, folderPaths));
+  EXPECT_EQ(folderPaths[0], "/books");
   index.close();
 
-  bytes[header.nameStart + sizeof(PATH_HASH) + 5] = 255;
+  bytes[header.nameStart + 5] = 255;
   Storage.setFile("/library.clx", std::move(bytes));
   ASSERT_TRUE(index.open("/library.clx"));
   EXPECT_FALSE(index.readSourceAuthor(record, author));
 }
 
-TEST(LibraryIndexFile, RejectsTruncatedAndOverflowingPathHashes) {
+TEST(LibraryIndexFile, ReadsPathHashWithoutSeekingTheVariableBlob) {
   library::ClixHeader header{};
   std::memcpy(header.magic, library::CLIX_MAGIC, sizeof(header.magic));
   header.formatVersion = library::CLIX_FORMAT_VERSION;
   header.foldVersion = library::CLIX_FOLD_VERSION;
   header.bookCount = 1;
-  library::layoutSections(header, 0, sizeof(uint64_t) - 1);
+  library::layoutSections(header, 0, 0);
   std::vector<uint8_t> bytes(header.selfSize, 0);
   std::memcpy(bytes.data(), &header, sizeof(header));
   Storage.setFile("/library.clx", std::move(bytes));
@@ -191,13 +189,13 @@ TEST(LibraryIndexFile, RejectsTruncatedAndOverflowingPathHashes) {
   library::LibraryIndexFile index;
   ASSERT_TRUE(index.open("/library.clx"));
   library::ClixRecord record{};
-  uint64_t hash = 1;
-  EXPECT_FALSE(index.readPathHash(record, hash));
-  EXPECT_EQ(hash, 0u);
-  EXPECT_TRUE(index.ioFailed());
-
+  record.pathHash = 42;
+  uint64_t hash = 0;
+  EXPECT_TRUE(index.readPathHash(record, hash));
+  EXPECT_EQ(hash, 42u);
   record.nameOff = UINT32_MAX;
-  EXPECT_FALSE(index.readPathHash(record, hash));
+  EXPECT_TRUE(index.readPathHash(record, hash));
+  EXPECT_EQ(hash, 42u);
 }
 
 TEST(LibraryIndexFile, RejectsFolderRecordBeyondFolderBlob) {
@@ -207,7 +205,7 @@ TEST(LibraryIndexFile, RejectsFolderRecordBeyondFolderBlob) {
   header.foldVersion = library::CLIX_FOLD_VERSION;
   header.bookCount = 1;
   const uint8_t folder[] = {5, '/'};
-  const auto blob = makeBlob(1, {'x', 0, 0, 0});
+  const auto blob = makeBlob({'x', 0, 0, 0});
   library::layoutSections(header, sizeof(folder), blob.size());
   std::vector<uint8_t> bytes(header.selfSize, 0);
   std::memcpy(bytes.data(), &header, sizeof(header));
