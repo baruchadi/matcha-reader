@@ -246,7 +246,8 @@ void drawLibrary(const GfxRenderer& renderer, const Rect rect, const ReadingHubS
     renderer.drawRoundedRect(rect.x, emptyY, rect.width, 86, 2, CARD_RADIUS, true);
     renderer.drawIcon(FolderIcon, rect.x + 16, emptyY + 27, 32);
     renderer.drawText(UI_12_FONT_ID, rect.x + 62, emptyY + 19, tr(STR_HUB_OPEN_LIBRARY), true, EpdFontFamily::BOLD);
-    renderer.drawText(SMALL_FONT_ID, rect.x + 62, emptyY + 51, tr(STR_NO_ACTIVE_BOOKS));
+    const char* detail = screen.shelfSummaryAvailable ? tr(STR_NO_ACTIVE_BOOKS) : tr(STR_HUB_SHELF_SUMMARY_UNAVAILABLE);
+    renderer.drawText(SMALL_FONT_ID, rect.x + 62, emptyY + 51, detail);
     drawChevron(renderer, rect.x + rect.width - 16, emptyY + 43, true);
     if (selected) renderer.invertRect(rect.x, emptyY, rect.width, 86);
     return;

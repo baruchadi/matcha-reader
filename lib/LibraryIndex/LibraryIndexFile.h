@@ -89,10 +89,6 @@ class LibraryIndexFile {
   // valid value, so success is independent of `out.empty()`.
   bool readSourceAuthor(const ClixRecord& record, std::string& out);
 
-  // Folder path by dense folder id. Reading Hub uses this to build its small shelf summary
-  // directly from the disk-backed index instead of materialising the JSON catalog in DRAM.
-  bool readFolderPath(uint16_t folderId, std::string& out);
-
   // Absolute path of the book, rebuilt from its folder record.
   bool readPath(const ClixRecord& record, std::string& out);
 

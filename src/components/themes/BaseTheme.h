@@ -174,6 +174,7 @@ struct ReadingHubScreen {
   const ReadingHubShelf* shelves = nullptr;
   int shelfPreviewCount = 0;
   int shelfTotalCount = 0;
+  bool shelfSummaryAvailable = true;
   int libraryTotalCount = 0;
   const RecentBook* queueBooks = nullptr;
   int queuePreviewCount = 0;

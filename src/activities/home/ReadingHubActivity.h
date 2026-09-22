@@ -58,6 +58,7 @@ class ReadingHubActivity final : public Activity {
   uint32_t ratingSum = 0;
   bool libraryCountKnown = false;
   bool shelvesLoaded = false;
+  bool shelfSummaryAvailable = false;
   bool queueFullyLoaded = false;
   bool completedBooksLoaded = false;
 

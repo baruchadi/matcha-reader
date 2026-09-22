@@ -1,5 +1,7 @@
 #include "ReadingHubActivity.h"
 
+#include <ArduinoJson.h>
+#include <BufferedFile.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalDisplay.h>
@@ -12,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdio>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <string_view>
@@ -19,6 +22,7 @@
 #include <vector>
 
 #include "LibraryBookInput.h"
+#include "LibraryPerformance.h"
 #include "ReadingStatsStore.h"
 #include "RecentBooksStore.h"
 #include "SeriesMetadata.h"
@@ -32,7 +36,61 @@
 
 namespace {
 constexpr char LIBRARY_INDEX_LOG_TAG[] = "HUB";
+constexpr char LIBRARY_CACHE_JSON[] = "/.crosspoint/library_cache.json";
 constexpr unsigned long LONG_PRESS_MS = 1000;
+
+class HubJsonFileReader {
+ public:
+  explicit HubJsonFileReader(HalFile& file) : input_(file, 512) {}
+
+  int read() {
+    uint8_t value = 0;
+    return input_.read(&value, 1) == 1 ? value : -1;
+  }
+
+  size_t readBytes(char* output, const size_t length) { return input_.read(output, length); }
+
+ private:
+  serialization::BufferedFileReader input_;
+};
+
+// The outer array parser consumes the opening '{' so it can distinguish a record from a comma
+// or the closing ']'. ArduinoJson still needs that byte; this adapter gives it back exactly once
+// and then delegates to the same sequential 512-byte reader.
+class PrefixedJsonObjectReader {
+ public:
+  explicit PrefixedJsonObjectReader(HubJsonFileReader& input) : input_(input) {}
+
+  int read() {
+    if (prefixPending_) {
+      prefixPending_ = false;
+      return '{';
+    }
+    return input_.read();
+  }
+
+  size_t readBytes(char* output, const size_t length) {
+    if (length == 0) return 0;
+    size_t written = 0;
+    if (prefixPending_) {
+      output[written++] = '{';
+      prefixPending_ = false;
+    }
+    return written + input_.readBytes(output + written, length - written);
+  }
+
+ private:
+  HubJsonFileReader& input_;
+  bool prefixPending_ = true;
+};
+
+int readNonWhitespace(HubJsonFileReader& input) {
+  int value = -1;
+  do {
+    value = input.read();
+  } while (value == ' ' || value == '\t' || value == '\r' || value == '\n');
+  return value;
+}
 
 std::string fallbackTitle(const std::string& path) {
   const size_t slash = path.find_last_of('/');
@@ -57,15 +115,6 @@ std::string shelfName(const std::string_view path) {
   return std::string(slash == std::string_view::npos ? path : path.substr(slash + 1));
 }
 
-std::string coverTemplateForPath(const std::string& path) {
-  const std::string hash = std::to_string(std::hash<std::string>{}(path));
-  if (FsHelpers::hasEpubExtension(path)) return "/.crosspoint/epub_" + hash + "/thumb_[HEIGHT].bmp";
-  if (FsHelpers::hasXtcExtension(path)) return "/.crosspoint/xtc_" + hash + "/thumb_[HEIGHT].bmp";
-  if (FsHelpers::hasTxtExtension(path) || FsHelpers::hasMarkdownExtension(path)) return {};
-  // The library index's remaining book shape is a converted manga folder. The existence check
-  // in cachedCoverPath keeps an arbitrary unsupported path from ever being drawn as a cover.
-  return "/.crosspoint/manga_" + hash + "/thumb_[HEIGHT].bmp";
-}
 }  // namespace
 
 ReadingHubActivity::ReadingHubActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -224,78 +273,137 @@ void ReadingHubActivity::loadShelves() {
   shelves = {};
   shelfPreviewCount = 0;
   shelfTotalCount = 0;
+  shelfSummaryAvailable = false;
 
-  // The old implementation inflated the full 2,048-book JSON catalog plus a sort vector just
-  // to draw seven rows. The CLX index already has dense folder ids and path hashes, so this pass
-  // stays bounded: seven shelf models plus at most 4KB of completion hashes.
+  // Read the same catalog CoverLibraryActivity opens, one filtered JSON object at a time. This
+  // includes converted manga folders (which CLX deliberately does not index) while bounding heap
+  // to one path/cover record, seven shelf models and at most 4KB of completion hashes.
   std::unique_ptr<uint64_t[]> finishedHashes;
   uint16_t finishedHashCount = 0;
-  library::LibraryIndexFile index;
+  HalFile file;
   if (!ReadingStatsStore::readFinishedPathHashesFromFile(finishedHashes, finishedHashCount) ||
-      !index.open(library::libraryIndexPath())) {
-    // A non-authoritative fallback must not invent shelves from the ten-item recents list. One
-    // explicit Open Library row takes the user to the existing full browser instead.
+      !Storage.openFileForRead("HUB", LIBRARY_CACHE_JSON, file)) {
     shelfTotalCount = 1;
     shelvesLoaded = true;
     return;
   }
 
-  libraryBookCount = index.bookCount();
-  libraryCountKnown = true;
-  std::array<uint16_t, MAX_SHELF_PREVIEW> folderIds{};
-  bool hasMoreShelves = false;
-  for (uint16_t ordinal = 0; ordinal < index.bookCount(); ordinal++) {
-    library::ClixRecord record{};
-    uint64_t pathHash = 0;
-    if (!index.readRecord(ordinal, record) || !index.readPathHash(record, pathHash)) {
-      shelves = {};
-      shelfPreviewCount = 0;
-      shelfTotalCount = 1;
-      shelvesLoaded = true;
-      return;
+  HubJsonFileReader input(file);
+  constexpr char PREFIX[] = "{\"books\":[";
+  bool parseOk = true;
+  for (size_t index = 0; index < sizeof(PREFIX) - 1; index++) {
+    if (input.read() != PREFIX[index]) {
+      parseOk = false;
+      break;
     }
+  }
+
+  JsonDocument filter;
+  filter["path"] = true;
+  filter["coverBmpPath"] = true;
+  JsonDocument record;
+  bool first = true;
+  bool hasMoreShelves = false;
+  uint16_t catalogBookCount = 0;
+  std::array<uint8_t, RecentBooksStore::MAX_RECENT_BOOKS> recentSeen{};
+  const auto& recents = RECENT_BOOKS.getBooks();
+  const auto addBook = [&](const std::string_view path, const std::string_view cover) {
+    if (catalogBookCount < UINT16_MAX) catalogBookCount++;
+    const uint64_t pathHash = ReadingStatsStore::finishedPathHash(path);
     if (finishedHashCount > 0 &&
         std::binary_search(finishedHashes.get(), finishedHashes.get() + finishedHashCount, pathHash)) {
-      continue;
+      return;
     }
 
+    const std::string folder(libraryFolderPath(path));
     int shelfIndex = -1;
     for (int candidate = 0; candidate < shelfPreviewCount; candidate++) {
-      if (folderIds[candidate] == record.folderId) {
+      if (shelves[candidate].path == folder) {
         shelfIndex = candidate;
         break;
       }
     }
     if (shelfIndex >= 0) {
       if (shelves[shelfIndex].bookCount < UINT16_MAX) shelves[shelfIndex].bookCount++;
-      continue;
+      if (shelves[shelfIndex].coverBmpPath.empty() && !cover.empty() && cover.size() <= 500) {
+        shelves[shelfIndex].coverBmpPath = cachedCoverPath(std::string(cover), 72);
+      }
+      return;
     }
     if (shelfPreviewCount >= MAX_SHELF_PREVIEW) {
       hasMoreShelves = true;
-      continue;
-    }
-
-    std::string folder;
-    if (!index.readFolderPath(record.folderId, folder)) {
-      shelves = {};
-      shelfPreviewCount = 0;
-      shelfTotalCount = 1;
-      shelvesLoaded = true;
       return;
     }
+
     shelfIndex = shelfPreviewCount++;
-    folderIds[shelfIndex] = record.folderId;
     shelves[shelfIndex].path = folder;
     shelves[shelfIndex].name = shelfName(folder);
     shelves[shelfIndex].bookCount = 1;
-    std::string bookPath;
-    if (index.readPath(record, bookPath)) {
-      shelves[shelfIndex].coverBmpPath = cachedCoverPath(coverTemplateForPath(bookPath), 72);
+    if (!cover.empty() && cover.size() <= 500) {
+      shelves[shelfIndex].coverBmpPath = cachedCoverPath(std::string(cover), 72);
     }
+  };
+  while (parseOk) {
+    int token = readNonWhitespace(input);
+    if (token == ']') {
+      parseOk = readNonWhitespace(input) == '}';
+      break;
+    }
+    if (!first) {
+      if (token != ',') {
+        parseOk = false;
+        break;
+      }
+      token = readNonWhitespace(input);
+    }
+    if (token != '{') {
+      parseOk = false;
+      break;
+    }
+
+    record.clear();
+    PrefixedJsonObjectReader objectInput(input);
+    const DeserializationError error =
+        deserializeJson(record, objectInput, DeserializationOption::Filter(filter.as<JsonVariantConst>()));
+    if (error) {
+      LOG_ERR("HUB", "Library cache record parse failed: %s", error.c_str());
+      parseOk = false;
+      break;
+    }
+    first = false;
+    const char* path = record["path"] | "";
+    const char* cover = record["coverBmpPath"] | "";
+    const size_t pathLength = strnlen(path, 501);
+    if (pathLength == 0 || pathLength > 500) continue;
+    const std::string_view pathView{path, pathLength};
+    for (size_t recentIndex = 0; recentIndex < recents.size() && recentIndex < recentSeen.size(); recentIndex++) {
+      if (std::string_view{recents[recentIndex].path} == pathView) recentSeen[recentIndex] = 1;
+    }
+    const size_t coverLength = strnlen(cover, 501);
+    addBook(pathView, coverLength <= 500 ? std::string_view{cover, coverLength} : std::string_view{});
   }
+  file.close();
+  if (!parseOk) {
+    shelves = {};
+    shelfPreviewCount = 0;
+    shelfTotalCount = 1;
+    shelvesLoaded = true;
+    return;
+  }
+
+  // CoverLibraryActivity merges the ten-item recent list over the persisted scan cache for its
+  // first frame. Mirror that bounded merge so a newly opened book is neither missing from the Hub
+  // count nor sent to a shelf that disagrees with the destination while the background scan runs.
+  for (size_t index = 0; index < recents.size() && index < recentSeen.size(); index++) {
+    if (!recentSeen[index]) addBook(recents[index].path, recents[index].coverBmpPath);
+  }
+
   std::sort(shelves.begin(), shelves.begin() + shelfPreviewCount,
             [](const ReadingHubShelf& left, const ReadingHubShelf& right) { return left.name < right.name; });
   shelfTotalCount = shelfPreviewCount + (hasMoreShelves ? 1 : 0);
+  libraryBookCount = catalogBookCount;
+  libraryCountKnown = true;
+  shelfSummaryAvailable = true;
   shelvesLoaded = true;
 }
 
@@ -673,6 +781,7 @@ void ReadingHubActivity::render(RenderLock&&) {
         .shelves = shelves.data(),
         .shelfPreviewCount = shelfPreviewCount,
         .shelfTotalCount = shelfTotalCount,
+        .shelfSummaryAvailable = shelfSummaryAvailable,
         .libraryTotalCount = libraryBookCount,
         .queueBooks = queueBooks.data(),
         .queuePreviewCount = queuePreviewCount,

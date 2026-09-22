@@ -85,6 +85,7 @@ class CoverLibraryActivity final : public Activity {
   int openShelfIndex = -1;
   int shelfContentIndex = 0;
   int shelfScrollRow = 0;
+  bool requestedShelfPending = false;
 
   static constexpr int TAB_COUNT = 3;
   static constexpr int GRID_COLS = 3;
@@ -144,6 +145,7 @@ class CoverLibraryActivity final : public Activity {
   [[nodiscard]] int shelfRowAtPoint(int x, int y, int contentTop, int contentHeight) const;
   void loadShelves();
   void loadShelfBooks(int shelfIndex);
+  bool openShelfByIdentity(const std::string& folderPath, bool completed);
   int readProgressPercent(const std::string& bookPath) const;
 
   int getContentItemCount() const;

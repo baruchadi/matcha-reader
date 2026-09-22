@@ -112,7 +112,9 @@ order. Hold Confirm on a queued book to move it earlier or later. Read has one R
 **Show all completed books** action, and up to six finished covers; hold Confirm on a cover to add or edit its rating.
 Series stay together in completed previews and retain their book-number subtitles alongside ratings. The initial Now
 screen loads only its current and next books; shelf, queue and completed metadata are resolved lazily when their
-section is opened, and cover thumbnail paths are cached so focus movement does not rescan thumbnail directories.
+section is opened. The shelf summary streams the same persisted catalog as Matcha Covers one book at a time, so manga
+folders and ordinary ebooks produce matching shelf counts without loading the full catalog into RAM. Cover thumbnail
+paths are cached so focus movement does not rescan thumbnail directories.
 Changing back to Classic, Lyra, Lyra Extended, or RoundedRaff restores the original home screen.
 
 ### Reading stats

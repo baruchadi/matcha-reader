@@ -874,6 +874,14 @@ bool CoverLibraryActivity::applyLibraryScan() {
   RenderLock lock{RenderLock::Try{}};
   if (!lock.held()) return false;
 
+  std::string openFolderPath;
+  bool openCompleted = false;
+  const bool hadOpenShelf = shelvesLoaded && openShelfIndex >= 0 && openShelfIndex < static_cast<int>(shelves.size());
+  if (hadOpenShelf) {
+    openFolderPath = shelves[openShelfIndex].folderPath;
+    openCompleted = shelves[openShelfIndex].completed;
+  }
+
   // Cached entries whose files vanished drop out; recents remain first without building a
   // second full catalog. Prune from the completed in-memory walk instead of touching the SD
   // before the Library's first paint.
@@ -898,7 +906,20 @@ bool CoverLibraryActivity::applyLibraryScan() {
   rebuildBookViews(/*pruneMissing=*/true);
   if (changed) {
     markAllProgressPending();
-    if (shelvesLoaded) loadShelves();
+    if (shelvesLoaded) {
+      loadShelves();
+      bool reopened = hadOpenShelf && openShelfByIdentity(openFolderPath, openCompleted);
+      if (!reopened && requestedShelfPending) {
+        reopened =
+            openShelfByIdentity(initialShelfPath, initialView == InitialView::COMPLETED || initialShelfCompleted);
+        requestedShelfPending = !reopened;
+      }
+      if (hadOpenShelf && !reopened) {
+        openShelfIndex = -1;
+        shelfBooks.clear();
+        shelfBookProgress.clear();
+      }
+    }
     lastRendered.valid = false;
     LOG_DBG("RBA", "Library scan applied: %u books", static_cast<unsigned>(recentBooks.size()));
   }
@@ -1080,6 +1101,18 @@ void CoverLibraryActivity::loadShelfBooks(const int shelfIndex) {
   shelfProgressWarmCursor_ = 0;
 }
 
+bool CoverLibraryActivity::openShelfByIdentity(const std::string& folderPath, const bool completed) {
+  const auto requested = std::find_if(shelves.begin(), shelves.end(), [&](const ShelfInfo& shelf) {
+    return completed ? shelf.completed : (!shelf.completed && shelf.folderPath == folderPath);
+  });
+  if (requested == shelves.end()) return false;
+  openShelfIndex = static_cast<int>(requested - shelves.begin());
+  shelfContentIndex = 0;
+  shelfScrollRow = 0;
+  loadShelfBooks(openShelfIndex);
+  return true;
+}
+
 int CoverLibraryActivity::readProgressPercent(const std::string& bookPath) const {
   std::string cachePath;
   if (FsHelpers::hasEpubExtension(bookPath)) {
@@ -1133,17 +1166,12 @@ void CoverLibraryActivity::onEnter() {
   scrollRow = 0;
   shelvesScroll = 0;
   openShelfIndex = -1;
+  requestedShelfPending = initialView == InitialView::COMPLETED || initialShelfCompleted || !initialShelfPath.empty();
   if (selectedTab == 1) {
     loadShelves();
-    if (initialView == InitialView::COMPLETED || initialShelfCompleted || !initialShelfPath.empty()) {
-      const auto requested = std::find_if(shelves.begin(), shelves.end(), [&](const ShelfInfo& shelf) {
-        if (initialView == InitialView::COMPLETED || initialShelfCompleted) return shelf.completed;
-        return !shelf.completed && shelf.folderPath == initialShelfPath;
-      });
-      if (requested != shelves.end()) {
-        openShelfIndex = static_cast<int>(requested - shelves.begin());
-        loadShelfBooks(openShelfIndex);
-      }
+    if (requestedShelfPending) {
+      requestedShelfPending =
+          !openShelfByIdentity(initialShelfPath, initialView == InitialView::COMPLETED || initialShelfCompleted);
     }
   }
   requestUpdate();
