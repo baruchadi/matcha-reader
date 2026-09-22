@@ -52,6 +52,9 @@ class ReadingStatsStore {
   std::vector<DailyReading> days;  // sorted ascending by date
   uint16_t booksFinished = 0;
   std::vector<std::string> finishedBookPaths;
+  // Parallel to finishedBookPaths: 0 means not rated, 1..5 is the reader's star rating.
+  // Keeping one byte beside the existing completion record avoids a second per-book index.
+  std::vector<uint8_t> finishedBookRatings;
   std::vector<BookReading> books;
   // Same, for the per-language calendar; the old 512-entry ring held barely a year for one
   // language. 10 bytes per (day, language) -- dearer than `days` because each record carries
@@ -89,6 +92,10 @@ class ReadingStatsStore {
   // the resume-position cache untouched.
   [[nodiscard]] bool isBookFinished(const std::string& bookPath) const;
   bool setBookFinished(const std::string& bookPath, bool finished);
+  [[nodiscard]] uint8_t getBookRating(const std::string& bookPath) const;
+  // Ratings belong to completed books. Returns false for an unfinished path, an invalid
+  // rating, or when the requested rating is already stored.
+  bool setBookRating(const std::string& bookPath, uint8_t rating);
   // Repoint completion and per-book totals when a file or containing folder is renamed.
   bool updateBookPath(const std::string& oldPath, const std::string& newPath);
 

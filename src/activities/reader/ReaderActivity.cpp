@@ -18,6 +18,7 @@
 #include "SdCardFontSystem.h"
 #include "TxtReaderActivity.h"
 #include "XtcReaderActivity.h"
+#include "activities/library/BookRatingActivity.h"
 #include "activities/util/BmpViewerActivity.h"
 
 ReaderActivity::ReaderActivity(const char* name, GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -147,6 +148,9 @@ bool ReaderActivity::handleEndOfBookMenu(const bool suppressConfirmRelease) {
     case EndOfBookOptions::Action::OpenBook:
       activityManager.goToReader(openPath);
       return true;
+    case EndOfBookOptions::Action::RateBook:
+      showEndOfBookRating();
+      return true;
     case EndOfBookOptions::Action::GoHome:
       onGoHome();
       return true;
@@ -161,6 +165,26 @@ bool ReaderActivity::handleEndOfBookMenu(const bool suppressConfirmRelease) {
       return false;
   }
   return false;
+}
+
+void ReaderActivity::showEndOfBookRating() {
+  READING_STATS_STORE.loadFromFile();
+  if (READING_STATS_STORE.setBookFinished(bookPath, true)) READING_STATS_STORE.saveToFile();
+  ReadingQueueStore queueStore;
+  if (queueStore.loadFromFile() && queueStore.queue().remove(bookPath)) queueStore.saveToFile();
+
+  auto activity = makeUniqueNoThrow<BookRatingActivity>(renderer, mappedInput, getBookTitle(),
+                                                        READING_STATS_STORE.getBookRating(bookPath), true);
+  if (!activity) {
+    LOG_ERR("READER", "Failed to allocate book rating");
+    return;
+  }
+  startActivityForResult(std::move(activity), [this](const ActivityResult& result) {
+    if (!result.isCancelled && std::holds_alternative<IntervalResult>(result.data)) {
+      const auto rating = static_cast<uint8_t>(std::get<IntervalResult>(result.data).value);
+      if (READING_STATS_STORE.setBookRating(bookPath, rating)) READING_STATS_STORE.saveToFile();
+    }
+  });
 }
 
 bool ReaderActivity::handleEndOfBookPageTurn(const bool prevTriggered, const bool nextTriggered) {

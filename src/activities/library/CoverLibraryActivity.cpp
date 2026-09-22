@@ -26,6 +26,7 @@
 #include "activities/home/EpubProgressUtil.h"
 #include "activities/home/XtcProgressUtil.h"
 #include "activities/library/BookActionsActivity.h"
+#include "activities/library/BookRatingActivity.h"
 #include "components/UIScale.h"
 #include "components/UITheme.h"
 #include "components/icons/cover.h"
@@ -1533,6 +1534,7 @@ void CoverLibraryActivity::showBookActions(const std::string& path, const std::s
 
 void CoverLibraryActivity::applyBookAction(const BookAction action, const std::string& path, const std::string& title) {
   bool viewsChanged = false;
+  bool rateAfterAction = false;
   switch (action) {
     case BookAction::VIEW_STATS:
       showBookStats(path, title);
@@ -1549,11 +1551,15 @@ void CoverLibraryActivity::applyBookAction(const BookAction action, const std::s
       viewsChanged = READING_STATS_STORE.setBookFinished(path, true);
       if (viewsChanged) READING_STATS_STORE.saveToFile();
       if (readingQueueStore.queue().remove(path)) readingQueueStore.saveToFile();
+      rateAfterAction = true;
       break;
     case BookAction::MARK_UNFINISHED:
       viewsChanged = READING_STATS_STORE.setBookFinished(path, false);
       if (viewsChanged) READING_STATS_STORE.saveToFile();
       break;
+    case BookAction::RATE_BOOK:
+      showBookRating(path, title);
+      return;
     case BookAction::MOVE_EARLIER:
       viewsChanged = readingQueueStore.queue().moveEarlier(path);
       if (viewsChanged) readingQueueStore.saveToFile();
@@ -1564,6 +1570,7 @@ void CoverLibraryActivity::applyBookAction(const BookAction action, const std::s
       break;
   }
   if (viewsChanged) refreshBookViewsAfterAction(path);
+  if (rateAfterAction) showBookRating(path, title);
 }
 
 void CoverLibraryActivity::refreshBookViewsAfterAction(const std::string& actedPath) {
@@ -1611,6 +1618,24 @@ void CoverLibraryActivity::showBookStats(const std::string& path, const std::str
     LOG_ERR("RBA", "Failed to allocate book stats");
     return;
   }
+  startActivityForResult(std::move(activity), std::move(handler));
+}
+
+void CoverLibraryActivity::showBookRating(const std::string& path, const std::string& title) {
+  auto activity =
+      makeUniqueNoThrow<BookRatingActivity>(renderer, mappedInput, title, READING_STATS_STORE.getBookRating(path));
+  if (!activity) {
+    LOG_ERR("RBA", "Failed to allocate book rating");
+    return;
+  }
+  auto handler = [this, path](const ActivityResult& result) {
+    lastRendered.valid = false;
+    if (!result.isCancelled && std::holds_alternative<IntervalResult>(result.data)) {
+      const auto rating = static_cast<uint8_t>(std::get<IntervalResult>(result.data).value);
+      if (READING_STATS_STORE.setBookRating(path, rating)) READING_STATS_STORE.saveToFile();
+    }
+    requestUpdate();
+  };
   startActivityForResult(std::move(activity), std::move(handler));
 }
 

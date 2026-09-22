@@ -12,9 +12,10 @@ ReadingStatsStore ReadingStatsStore::instance;
 
 static std::string statsPath() { return sdsystem::path("reading_stats.bin"); }
 // v3 appends the per-book block after the finished-book paths; v4 appends the per-day-per-language
-// block after that. Each older reader stops where its own format ends and ignores what follows,
-// rather than rejecting the file -- it will, however, drop the newer blocks the next time it saves.
-static constexpr uint8_t STATS_VERSION = 4;
+// block after that; v5 appends one rating byte per finished path. Each older reader stops where
+// its own format ends and ignores what follows, rather than rejecting the file -- it will,
+// however, drop the newer blocks the next time it saves.
+static constexpr uint8_t STATS_VERSION = 5;
 // Longest language tag a per-book entry stores, on disk and in memory. Enforced on BOTH sides:
 // the writer clamps to it, and the loader rejects anything longer rather than allocating on a
 // corrupt or misaligned file's say-so.
@@ -314,14 +315,35 @@ bool ReadingStatsStore::setBookFinished(const std::string& bookPath, const bool 
   if (finished) {
     if (it != finishedBookPaths.end() || finishedBookPaths.size() >= 500) return false;
     finishedBookPaths.push_back(bookPath);
+    finishedBookRatings.push_back(0);
   } else {
     if (it == finishedBookPaths.end()) return false;
+    const size_t index = static_cast<size_t>(it - finishedBookPaths.begin());
     finishedBookPaths.erase(it);
+    if (index < finishedBookRatings.size()) finishedBookRatings.erase(finishedBookRatings.begin() + index);
   }
   // Once the path block is intact (the normal case), this is the current Completed collection.
   // loadFromFile() already derives the same count from this list. Manual "unfinished" must be
   // allowed to count down rather than preserving a lifetime high-water mark.
   booksFinished = static_cast<uint16_t>(finishedBookPaths.size());
+  return true;
+}
+
+uint8_t ReadingStatsStore::getBookRating(const std::string& bookPath) const {
+  const auto it = std::find(finishedBookPaths.begin(), finishedBookPaths.end(), bookPath);
+  if (it == finishedBookPaths.end()) return 0;
+  const size_t index = static_cast<size_t>(it - finishedBookPaths.begin());
+  return index < finishedBookRatings.size() ? finishedBookRatings[index] : 0;
+}
+
+bool ReadingStatsStore::setBookRating(const std::string& bookPath, const uint8_t rating) {
+  if (rating > 5) return false;
+  const auto it = std::find(finishedBookPaths.begin(), finishedBookPaths.end(), bookPath);
+  if (it == finishedBookPaths.end()) return false;
+  const size_t index = static_cast<size_t>(it - finishedBookPaths.begin());
+  if (finishedBookRatings.size() < finishedBookPaths.size()) finishedBookRatings.resize(finishedBookPaths.size(), 0);
+  if (finishedBookRatings[index] == rating) return false;
+  finishedBookRatings[index] = rating;
   return true;
 }
 
@@ -331,11 +353,18 @@ bool ReadingStatsStore::updateBookPath(const std::string& oldPath, const std::st
 
   const auto oldFinished = std::find(finishedBookPaths.begin(), finishedBookPaths.end(), oldPath);
   if (oldFinished != finishedBookPaths.end()) {
+    const size_t oldIndex = static_cast<size_t>(oldFinished - finishedBookPaths.begin());
     const auto newFinished = std::find(finishedBookPaths.begin(), finishedBookPaths.end(), newPath);
     if (newFinished == finishedBookPaths.end()) {
       *oldFinished = newPath;
     } else {
+      const size_t newIndex = static_cast<size_t>(newFinished - finishedBookPaths.begin());
+      if (oldIndex < finishedBookRatings.size() && newIndex < finishedBookRatings.size() &&
+          finishedBookRatings[newIndex] == 0) {
+        finishedBookRatings[newIndex] = finishedBookRatings[oldIndex];
+      }
       finishedBookPaths.erase(oldFinished);
+      if (oldIndex < finishedBookRatings.size()) finishedBookRatings.erase(finishedBookRatings.begin() + oldIndex);
     }
     changed = true;
   }
@@ -510,6 +539,14 @@ bool ReadingStatsStore::saveToFile() const {
     f.write(reinterpret_cast<const uint8_t*>(e.language), 4);
     f.write(reinterpret_cast<const uint8_t*>(&e.minutesRead), 2);
   }
+  // Ratings block (v5+), aligned one-for-one with the finished path block. Write a zero for any
+  // missing in-memory slot so a recovered legacy/corrupt file is normalized on its next save.
+  f.write(reinterpret_cast<const uint8_t*>(&pathCount), 2);
+  for (size_t i = 0; i < pathCount; i++) {
+    const uint8_t rating = i < finishedBookRatings.size() && finishedBookRatings[i] <= 5 ? finishedBookRatings[i]
+                                                                                         : static_cast<uint8_t>(0);
+    f.write(&rating, 1);
+  }
   f.close();
   return true;
 }
@@ -562,6 +599,7 @@ bool ReadingStatsStore::loadFromFile() {
   }
   // Read finished book paths
   finishedBookPaths.clear();
+  finishedBookRatings.clear();
   bool pathsIntact = false;
   uint16_t pathCount = 0;
   if (f.read(reinterpret_cast<uint8_t*>(&pathCount), 2) == 2 && pathCount <= 500) {
@@ -613,28 +651,35 @@ bool ReadingStatsStore::loadFromFile() {
   }
   // Per-day-per-language block (v4+)
   languageDays.clear();
+  bool languageDaysIntact = version < 4;
   if (version >= 4 && booksIntact) {
     uint16_t langDayCount = 0;
     if (f.read(reinterpret_cast<uint8_t*>(&langDayCount), 2) == 2) {
       // Same bounded-tail read as the day block above: a uint16 count is 640KB of records at
       // worst, and reserve() aborts under -fno-exceptions rather than failing.
       const size_t keepLang = std::min<size_t>(langDayCount, MAX_LANG_DAYS);
+      bool readIntact = true;
       for (size_t i = 0; i + keepLang < langDayCount; i++) {
         uint8_t discard[10];
-        if (f.read(discard, sizeof(discard)) != sizeof(discard)) break;
+        if (f.read(discard, sizeof(discard)) != sizeof(discard)) {
+          readIntact = false;
+          break;
+        }
       }
       languageDays.reserve(keepLang);
-      for (size_t i = 0; i < keepLang; i++) {
+      for (size_t i = 0; readIntact && i < keepLang; i++) {
         LanguageDaily e{};
-        if (f.read(reinterpret_cast<uint8_t*>(&e.year), 2) != 2) break;
-        if (f.read(&e.month, 1) != 1) break;
-        if (f.read(&e.day, 1) != 1) break;
-        if (f.read(reinterpret_cast<uint8_t*>(e.language), 4) != 4) break;
-        if (f.read(reinterpret_cast<uint8_t*>(&e.minutesRead), 2) != 2) break;
+        if (f.read(reinterpret_cast<uint8_t*>(&e.year), 2) != 2 || f.read(&e.month, 1) != 1 || f.read(&e.day, 1) != 1 ||
+            f.read(reinterpret_cast<uint8_t*>(e.language), 4) != 4 ||
+            f.read(reinterpret_cast<uint8_t*>(&e.minutesRead), 2) != 2) {
+          readIntact = false;
+          break;
+        }
         e.language[3] = '\0';         // a corrupt record must not leave an unterminated tag
         if (e.year < 2020) continue;  // same unset-clock garbage the per-day loop drops
         languageDays.push_back(e);
       }
+      languageDaysIntact = readIntact;
       // Same ordering guarantee as days, for the same passes.
       const auto byDate = [](const LanguageDaily& a, const LanguageDaily& b) {
         return daysSinceEpoch(a.year, a.month, a.day) < daysSinceEpoch(b.year, b.month, b.day);
@@ -642,6 +687,24 @@ bool ReadingStatsStore::loadFromFile() {
       if (!std::is_sorted(languageDays.begin(), languageDays.end(), byDate)) {
         std::stable_sort(languageDays.begin(), languageDays.end(), byDate);
       }
+    }
+  }
+  // Ratings (v5+). Any older, truncated, mismatched, or out-of-range block safely becomes
+  // "unrated" without losing the completed paths themselves.
+  finishedBookRatings.assign(finishedBookPaths.size(), 0);
+  if (version >= 5 && pathsIntact && booksIntact && languageDaysIntact) {
+    uint16_t ratingCount = 0;
+    if (f.read(reinterpret_cast<uint8_t*>(&ratingCount), 2) == 2 && ratingCount == finishedBookPaths.size()) {
+      bool ratingsIntact = true;
+      for (size_t i = 0; i < ratingCount; i++) {
+        uint8_t rating = 0;
+        if (f.read(&rating, 1) != 1 || rating > 5) {
+          ratingsIntact = false;
+          break;
+        }
+        finishedBookRatings[i] = rating;
+      }
+      if (!ratingsIntact) std::fill(finishedBookRatings.begin(), finishedBookRatings.end(), 0);
     }
   }
   f.close();

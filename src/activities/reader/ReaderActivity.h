@@ -43,6 +43,7 @@ class ReaderActivity : public Activity {
   bool handleEndOfBookMenu(bool suppressConfirmRelease = false);
   bool handleEndOfBookPageTurn(bool prevTriggered, bool nextTriggered);
   bool renderEndOfBook(const char* logTag);
+  void showEndOfBookRating();
   void noteReaderFrameDisplayed();
   void disableFastInitialRefresh() { pagesUntilFullRefresh = 0; }
 

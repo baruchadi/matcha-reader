@@ -1,10 +1,10 @@
 #pragma once
 
+#include <I18n.h>
+
 #include <array>
 #include <cstdint>
 #include <string>
-
-#include <I18n.h>
 
 #include "activities/UiListActivity.h"
 #include "components/UITheme.h"
@@ -15,6 +15,7 @@ enum class BookAction : uint32_t {
   REMOVE_FROM_QUEUE,
   MARK_COMPLETED,
   MARK_UNFINISHED,
+  RATE_BOOK,
   MOVE_EARLIER,
   MOVE_LATER,
 };
@@ -25,7 +26,7 @@ class BookActionsActivity final : public UiListActivity {
                       bool finished, int queueIndex, int queueCount);
 
  private:
-  static constexpr int MAX_ACTIONS = 5;
+  static constexpr int MAX_ACTIONS = 6;
   std::string title_;
   std::array<freeink::ui::ListItem, MAX_ACTIONS> rows_{};
   std::array<BookAction, MAX_ACTIONS> actions_{};

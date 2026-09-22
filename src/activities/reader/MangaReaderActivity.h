@@ -374,6 +374,7 @@ class MangaReaderActivity final : public Activity {
   bool handleEndOfBookPageTurn(bool prevTriggered, bool nextTriggered);
   void onReturnFromEndOfBook();
   bool renderEndOfBook();
+  void showEndOfBookRating();
 
   void saveProgress() const;
   void loadProgress();

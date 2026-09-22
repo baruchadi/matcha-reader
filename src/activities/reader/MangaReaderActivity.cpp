@@ -36,6 +36,7 @@
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "WordSelectionScan.h"
+#include "activities/library/BookRatingActivity.h"
 #include "activities/settings/SettingsActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -468,6 +469,9 @@ bool MangaReaderActivity::handleEndOfBookMenu() {
     case EndOfBookOptions::Action::OpenBook:
       activityManager.goToReader(openPath);
       return true;
+    case EndOfBookOptions::Action::RateBook:
+      showEndOfBookRating();
+      return true;
     case EndOfBookOptions::Action::GoHome:
       onGoHome();
       return true;
@@ -482,6 +486,28 @@ bool MangaReaderActivity::handleEndOfBookMenu() {
       return false;
   }
   return false;
+}
+
+void MangaReaderActivity::showEndOfBookRating() {
+  if (!book) return;
+  const std::string path = book->getFolder();
+  READING_STATS_STORE.loadFromFile();
+  if (READING_STATS_STORE.setBookFinished(path, true)) READING_STATS_STORE.saveToFile();
+  ReadingQueueStore queueStore;
+  if (queueStore.loadFromFile() && queueStore.queue().remove(path)) queueStore.saveToFile();
+
+  auto activity = makeUniqueNoThrow<BookRatingActivity>(renderer, mappedInput, book->getTitle(),
+                                                        READING_STATS_STORE.getBookRating(path), true);
+  if (!activity) {
+    LOG_ERR("MRA", "Failed to allocate book rating");
+    return;
+  }
+  startActivityForResult(std::move(activity), [path](const ActivityResult& result) {
+    if (!result.isCancelled && std::holds_alternative<IntervalResult>(result.data)) {
+      const auto rating = static_cast<uint8_t>(std::get<IntervalResult>(result.data).value);
+      if (READING_STATS_STORE.setBookRating(path, rating)) READING_STATS_STORE.saveToFile();
+    }
+  });
 }
 
 bool MangaReaderActivity::handleEndOfBookPageTurn(const bool prevTriggered, const bool nextTriggered) {

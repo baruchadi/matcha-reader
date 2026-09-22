@@ -18,6 +18,7 @@ BookActionsActivity::BookActionsActivity(GfxRenderer& renderer, MappedInputManag
   }
   addAction(finished ? BookAction::MARK_UNFINISHED : BookAction::MARK_COMPLETED,
             finished ? StrId::STR_MARK_UNFINISHED : StrId::STR_MARK_COMPLETED, UIIcon::Book);
+  if (finished) addAction(BookAction::RATE_BOOK, StrId::STR_RATE_THIS_BOOK, UIIcon::Stats);
   if (queued && queueIndex > 0) addAction(BookAction::MOVE_EARLIER, StrId::STR_MOVE_EARLIER, UIIcon::Bookmark);
   if (queued && queueIndex + 1 < queueCount) {
     addAction(BookAction::MOVE_LATER, StrId::STR_MOVE_LATER, UIIcon::Bookmark);

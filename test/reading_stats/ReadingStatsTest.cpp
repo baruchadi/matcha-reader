@@ -177,14 +177,53 @@ TEST_F(StatsTest, CompletionStatusCanBeReopenedWithoutChangingResumeProgress) {
   EXPECT_FALSE(s.setBookFinished("/Books/one.epub", false));
 }
 
+TEST_F(StatsTest, CompletedBookRatingRoundTripsAndLeavesWithCompletion) {
+  auto& s = READING_STATS_STORE;
+  ASSERT_TRUE(s.setBookFinished("/Books/rated.epub", true));
+  EXPECT_TRUE(s.setBookRating("/Books/rated.epub", 4));
+  EXPECT_EQ(s.getBookRating("/Books/rated.epub"), 4);
+  EXPECT_FALSE(s.setBookRating("/Books/rated.epub", 4));
+  EXPECT_FALSE(s.setBookRating("/Books/rated.epub", 6));
+  EXPECT_FALSE(s.setBookRating("/Books/not-finished.epub", 3));
+
+  ASSERT_TRUE(s.saveToFile());
+  READING_STATS_STORE = ReadingStatsStore{};
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_EQ(s.getBookRating("/Books/rated.epub"), 4);
+
+  EXPECT_TRUE(s.setBookFinished("/Books/rated.epub", false));
+  EXPECT_EQ(s.getBookRating("/Books/rated.epub"), 0);
+}
+
+TEST_F(StatsTest, VersionFourCompletionLoadsAsUnrated) {
+  auto& s = READING_STATS_STORE;
+  ASSERT_TRUE(s.setBookFinished("/Books/legacy.epub", true));
+  ASSERT_TRUE(s.setBookRating("/Books/legacy.epub", 5));
+  ASSERT_TRUE(s.saveToFile());
+
+  const std::string path = testRoot() + "/system/reading_stats.bin";
+  FILE* fp = fopen(path.c_str(), "r+b");
+  ASSERT_NE(fp, nullptr);
+  const uint8_t versionFour = 4;
+  ASSERT_EQ(fwrite(&versionFour, 1, 1, fp), 1u);
+  fclose(fp);
+
+  READING_STATS_STORE = ReadingStatsStore{};
+  ASSERT_TRUE(s.loadFromFile());
+  EXPECT_TRUE(s.isBookFinished("/Books/legacy.epub"));
+  EXPECT_EQ(s.getBookRating("/Books/legacy.epub"), 0);
+}
+
 TEST_F(StatsTest, RenameRepointsCompletionAndPerBookTotals) {
   auto& s = READING_STATS_STORE;
   s.setBookFinished("/Old/book.epub", true);
+  s.setBookRating("/Old/book.epub", 5);
   s.addBookMinutes("/Old/book.epub", "en", 12, Y, M, 8);
 
   EXPECT_TRUE(s.updateBookPath("/Old/book.epub", "/New/book.epub"));
   EXPECT_FALSE(s.isBookFinished("/Old/book.epub"));
   EXPECT_TRUE(s.isBookFinished("/New/book.epub"));
+  EXPECT_EQ(s.getBookRating("/New/book.epub"), 5);
   ASSERT_EQ(s.getBooks().size(), 1u);
   EXPECT_EQ(s.getBooks()[0].path, "/New/book.epub");
   EXPECT_EQ(s.getBooks()[0].minutesRead, 12u);

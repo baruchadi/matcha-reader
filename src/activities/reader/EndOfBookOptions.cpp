@@ -37,13 +37,11 @@ void EndOfBookOptions::loadOnce(const std::string& currentBookPath) {
   folder = FsHelpers::extractFolderPath(currentBookPath);
   names = NextBookFinder::findNextBooks(currentBookPath, MAX_SUGGESTIONS);
   selector.store(0, std::memory_order_relaxed);
-  if (!names.empty()) {
-    // One-time app setup on the render task, before the first render/route.
-    resetUi();
-    app.on(ACTION_ROW, &EndOfBookOptions::onRowEvent, this);
-    app.setScreen(&EndOfBookOptions::listScreen, this);
-    buildRowItems();
-  }
+  // One-time app setup on the render task, before the first render/route.
+  resetUi();
+  app.on(ACTION_ROW, &EndOfBookOptions::onRowEvent, this);
+  app.setScreen(&EndOfBookOptions::listScreen, this);
+  buildRowItems();
   // Release-publish so the main task, which gates all access on isLoaded, never
   // observes a partially built list (rowItems/rowLabels included)
   isLoaded.store(true, std::memory_order_release);
@@ -53,6 +51,12 @@ void EndOfBookOptions::loadOnce(const std::string& currentBookPath) {
 // once here since names never changes after loadOnce() completes.
 void EndOfBookOptions::buildRowItems() {
   rowCount = 0;
+  rowLabels[rowCount] = tr(STR_RATE_THIS_BOOK);
+  fui::ListItem rateItem;
+  rateItem.label = rowLabels[rowCount].c_str();
+  rateItem.actionValue = static_cast<int16_t>(rowCount);
+  rowItems[rowCount] = rateItem;
+  rowCount++;
   for (const auto& name : names) {
     if (rowCount >= MAX_ROWS) break;
     rowLabels[rowCount] = displayName(name);
@@ -72,7 +76,7 @@ void EndOfBookOptions::buildRowItems() {
   }
 }
 
-bool EndOfBookOptions::menuActive() const { return isLoaded.load(std::memory_order_acquire) && !names.empty(); }
+bool EndOfBookOptions::menuActive() const { return isLoaded.load(std::memory_order_acquire); }
 
 std::string EndOfBookOptions::fullPath(const size_t index) const {
   if (index >= names.size()) {
@@ -83,7 +87,7 @@ std::string EndOfBookOptions::fullPath(const size_t index) const {
 
 void EndOfBookOptions::onRowEvent(const fui::ActionEvent& event, void* user) {
   auto* self = static_cast<EndOfBookOptions*>(user);
-  if (event.value < 0 || event.value > static_cast<int16_t>(self->names.size())) return;
+  if (event.value < 0 || event.value >= static_cast<int16_t>(self->rowCount)) return;
   self->selector.store(event.value, std::memory_order_relaxed);
   // The tapped row leaves this screen (open book or home); a lingering flash
   // would gray an unrelated element on the next render.
@@ -100,9 +104,10 @@ EndOfBookOptions::Action EndOfBookOptions::handleMenuInput(const MappedInputMana
   // app.on(ACTION_ROW, ...)), which sets tappedRow, so it flags this as always false.
   // cppcheck-suppress knownConditionTrueFalse
   if (route && tappedRow >= 0) {
-    if (tappedRow < static_cast<int>(names.size())) {
+    if (tappedRow == 0) return Action::RateBook;
+    if (tappedRow <= static_cast<int>(names.size())) {
       if (openPath) {
-        *openPath = fullPath(tappedRow);
+        *openPath = fullPath(static_cast<size_t>(tappedRow - 1));
       }
       return Action::OpenBook;
     }
@@ -114,9 +119,10 @@ EndOfBookOptions::Action EndOfBookOptions::handleMenuInput(const MappedInputMana
 
   const int selectedIndex = selector.load(std::memory_order_relaxed);
   if (input.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (selectedIndex < static_cast<int>(names.size())) {
+    if (selectedIndex == 0) return Action::RateBook;
+    if (selectedIndex <= static_cast<int>(names.size())) {
       if (openPath) {
-        *openPath = fullPath(selectedIndex);
+        *openPath = fullPath(static_cast<size_t>(selectedIndex - 1));
       }
       return Action::OpenBook;
     }
@@ -139,7 +145,7 @@ EndOfBookOptions::Action EndOfBookOptions::handleMenuInput(const MappedInputMana
   const auto triggered = [&](const MappedInputManager::Button button) {
     return usePress ? input.wasPressed(button) : input.wasReleased(button);
   };
-  const int itemCount = static_cast<int>(names.size()) + 1;  // + "Home" entry
+  const int itemCount = static_cast<int>(rowCount);
   if (triggered(MappedInputManager::Button::NavPrevious)) {
     selector.store(ButtonNavigator::previousIndex(selectedIndex, itemCount), std::memory_order_relaxed);
     return Action::Redraw;
@@ -182,15 +188,7 @@ void EndOfBookOptions::buildListScreen(UiScreen& screen) {
 void EndOfBookOptions::render(GfxRenderer& renderer, const MappedInputManager& input) {
   const auto& metrics = UITheme::getInstance().getMetrics();
 
-  if (!menuActive()) {
-    // No suggestions: the historical plain end screen. 3/8 of the screen height matches
-    // the previous fixed position on the 480x800 panel and scales to other resolutions.
-    renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() * 3 / 8, tr(STR_END_OF_BOOK), true,
-                              EpdFontFamily::BOLD);
-    return;
-  }
-
-  // Suggestion menu: title, list (+ Home entry) and button hints. The hints are drawn at
+  // End menu: title, rating, optional next-book suggestions, Home, and button hints. The hints are drawn at
   // the physical front buttons, which is a logical side/top edge in the rotated
   // orientations — lay out inside the safe area so nothing hides behind them. Vertical
   // positions derive from the safe-area height and font line heights so other panel
@@ -200,7 +198,7 @@ void EndOfBookOptions::render(GfxRenderer& renderer, const MappedInputManager& i
   const int subtitleY = titleY + renderer.getLineHeight(UI_12_FONT_ID) + metrics.verticalSpacing;
 
   UITheme::drawCenteredText(renderer, safe, UI_12_FONT_ID, titleY, tr(STR_END_OF_BOOK), true, EpdFontFamily::BOLD);
-  UITheme::drawCenteredText(renderer, safe, UI_10_FONT_ID, subtitleY, tr(STR_EOB_CONTINUE_WITH));
+  UITheme::drawCenteredText(renderer, safe, UI_10_FONT_ID, subtitleY, tr(STR_EOB_WHATS_NEXT));
 
   // The list renders through the FreeInkApp so its rows register touch hit
   // rects; renderUi re-derives the device context, picking up any rotation

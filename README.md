@@ -89,6 +89,10 @@ one-click access to the same menu. Completion extends the same reading-history r
 end of a book; it does not reset or duplicate resume progress. Completed books leave the active grid and queue, and
 remain available in **Shelves → Completed**.
 
+Completed books can be rated from one to five stars. The end-of-book screen offers **Rate This Book** immediately,
+and the same rating remains editable from Book Actions. A rating belongs to the completed status: marking the book
+unfinished clears it instead of creating a competing status record.
+
 <p align="center"><img src="docs/images/screenshots/library.png" width="260" alt="Library grid with manga and EPUB covers side by side"></p>
 
 CrossPoint's own library screen is still here if you prefer it: an indexed list with title and author search across

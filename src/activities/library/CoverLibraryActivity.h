@@ -331,6 +331,7 @@ class CoverLibraryActivity final : public Activity {
   void applyBookAction(BookAction action, const std::string& path, const std::string& title);
   void refreshBookViewsAfterAction(const std::string& actedPath);
   void showBookStats(const std::string& path, const std::string& title);
+  void showBookRating(const std::string& path, const std::string& title);
 
  public:
   explicit CoverLibraryActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
