@@ -38,6 +38,7 @@ class ReadingHubActivity final : public Activity {
   bool libraryCountKnown = false;
 
   struct RowText {
+    char currentStatus[96]{};
     char libraryStatus[40]{};
     char queueStatus[40]{};
     char completedStatus[40]{};

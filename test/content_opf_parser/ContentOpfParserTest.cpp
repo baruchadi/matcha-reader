@@ -82,3 +82,46 @@ TEST(ContentOpfParserMetadata, NeverEntersManifestWhenMetadataElementIsMissing) 
   EXPECT_EQ(Storage.writeOpens, 0);
   EXPECT_EQ(Storage.readOpens, 0);
 }
+
+TEST(ContentOpfParserMetadata, ReadsCalibreSeriesAndPosition) {
+  const std::string xml = R"(<package xmlns:dc="urn:dc"><metadata>
+    <dc:title>The Wise Man's Fear</dc:title>
+    <meta name="calibre:series" content="The Kingkiller Chronicle"/>
+    <meta name="calibre:series_index" content="2.0"/>
+  </metadata></package>)";
+  ContentOpfParser parser("", "", xml.size(), nullptr);
+
+  parse(parser, xml);
+
+  EXPECT_EQ(parser.series, "The Kingkiller Chronicle");
+  EXPECT_EQ(parser.seriesIndex, "2.0");
+}
+
+TEST(ContentOpfParserMetadata, ReadsEpub3SeriesRefinements) {
+  const std::string xml = R"(<package xmlns:dc="urn:dc"><metadata>
+    <dc:title>Toradora 2</dc:title>
+    <meta property="belongs-to-collection" id="toradora">Toradora!</meta>
+    <meta refines="#toradora" property="collection-type">series</meta>
+    <meta refines="#toradora" property="group-position">2</meta>
+  </metadata></package>)";
+  ContentOpfParser parser("", "", xml.size(), nullptr);
+
+  parse(parser, xml);
+
+  EXPECT_EQ(parser.series, "Toradora!");
+  EXPECT_EQ(parser.seriesIndex, "2");
+}
+
+TEST(ContentOpfParserMetadata, DoesNotTreatExplicitNonSeriesCollectionAsSeries) {
+  const std::string xml = R"(<package xmlns:dc="urn:dc"><metadata>
+    <meta property="belongs-to-collection" id="publisher-set">Classroom Editions</meta>
+    <meta refines="#publisher-set" property="collection-type">set</meta>
+    <meta refines="#publisher-set" property="group-position">4</meta>
+  </metadata></package>)";
+  ContentOpfParser parser("", "", xml.size(), nullptr);
+
+  parse(parser, xml);
+
+  EXPECT_TRUE(parser.series.empty());
+  EXPECT_TRUE(parser.seriesIndex.empty());
+}

@@ -64,6 +64,23 @@ void appendMetadataText(std::string& out, const XML_Char* text, const int len, b
     out.push_back(c);
   }
 }
+
+void assignMetadataAttribute(std::string& out, const char* text) {
+  out.clear();
+  if (!text) return;
+  bool spacePending = false;
+  appendMetadataText(out, text, static_cast<int>(strlen(text)), spacePending);
+}
+
+bool asciiEqualsIgnoreCase(const std::string& value, const char* expected) {
+  const size_t expectedLen = strlen(expected);
+  if (value.size() != expectedLen) return false;
+  for (size_t i = 0; i < expectedLen; i++) {
+    if (std::tolower(static_cast<unsigned char>(value[i])) != std::tolower(static_cast<unsigned char>(expected[i])))
+      return false;
+  }
+  return true;
+}
 }  // namespace
 
 bool ContentOpfParser::setup() {
@@ -222,19 +239,61 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
 
   if (self->state == IN_METADATA && xmlLocalNameEquals(name, "meta")) {
     bool isCover = false;
-    std::string coverItemId;
+    const char* content = nullptr;
+    const char* metadataName = nullptr;
+    const char* property = nullptr;
+    const char* refines = nullptr;
+    const char* id = nullptr;
 
     for (int i = 0; atts[i]; i += 2) {
       if (strcmp(atts[i], "name") == 0 && strcmp(atts[i + 1], "cover") == 0) {
         isCover = true;
+        metadataName = atts[i + 1];
+      } else if (strcmp(atts[i], "name") == 0) {
+        metadataName = atts[i + 1];
       } else if (strcmp(atts[i], "content") == 0) {
-        coverItemId = atts[i + 1];
+        content = atts[i + 1];
+      } else if (strcmp(atts[i], "property") == 0) {
+        property = atts[i + 1];
+      } else if (strcmp(atts[i], "refines") == 0) {
+        refines = atts[i + 1];
+      } else if (strcmp(atts[i], "id") == 0) {
+        id = atts[i + 1];
       }
     }
 
-    if (isCover) {
-      self->coverItemId = coverItemId;
+    if (isCover && content) {
+      self->coverItemId = content;
     }
+
+    // EPUB 2 / Calibre convention. Attribute values are bounded and whitespace
+    // normalised just like dc:title, so a malformed package cannot grow these
+    // long-lived strings without limit.
+    if (metadataName && content && strcmp(metadataName, "calibre:series") == 0) {
+      assignMetadataAttribute(self->series, content);
+    } else if (metadataName && content && strcmp(metadataName, "calibre:series_index") == 0) {
+      assignMetadataAttribute(self->seriesIndex, content);
+    }
+
+    // EPUB 3 collection metadata stores the values as element text and links
+    // type/position refinements back to the collection id.
+    self->metaTextKind = MetaTextKind::None;
+    self->metaText.clear();
+    const bool refinesCollection =
+        refines && !self->collectionId.empty() && refines[0] == '#' && self->collectionId == refines + 1;
+    if (property && strcmp(property, "belongs-to-collection") == 0) {
+      self->collectionId = id ? id : "";
+      self->collectionName.clear();
+      self->collectionPosition.clear();
+      self->collectionTypeSeen = false;
+      self->collectionIsSeries = false;
+      self->metaTextKind = MetaTextKind::CollectionName;
+    } else if (property && refinesCollection && strcmp(property, "collection-type") == 0) {
+      self->metaTextKind = MetaTextKind::CollectionType;
+    } else if (property && refinesCollection && strcmp(property, "group-position") == 0) {
+      self->metaTextKind = MetaTextKind::CollectionPosition;
+    }
+    self->metadataSpacePending = false;
     return;
   }
 
@@ -436,6 +495,11 @@ void XMLCALL ContentOpfParser::characterData(void* userData, const XML_Char* s, 
     appendMetadataText(self->language, s, len, self->metadataSpacePending);
     return;
   }
+
+  if (self->state == IN_METADATA && self->metaTextKind != MetaTextKind::None) {
+    appendMetadataText(self->metaText, s, len, self->metadataSpacePending);
+    return;
+  }
 }
 
 void XMLCALL ContentOpfParser::endElement(void* userData, const XML_Char* name) {
@@ -479,7 +543,35 @@ void XMLCALL ContentOpfParser::endElement(void* userData, const XML_Char* name) 
     return;
   }
 
+  if (self->state == IN_METADATA && self->metaTextKind != MetaTextKind::None && xmlLocalNameEquals(name, "meta")) {
+    switch (self->metaTextKind) {
+      case MetaTextKind::CollectionName:
+        self->collectionName = std::move(self->metaText);
+        break;
+      case MetaTextKind::CollectionType:
+        self->collectionTypeSeen = true;
+        self->collectionIsSeries = asciiEqualsIgnoreCase(self->metaText, "series");
+        break;
+      case MetaTextKind::CollectionPosition:
+        self->collectionPosition = std::move(self->metaText);
+        break;
+      case MetaTextKind::None:
+        break;
+    }
+    self->metaText.clear();
+    self->metaTextKind = MetaTextKind::None;
+    return;
+  }
+
   if (self->state == IN_METADATA && xmlLocalNameEquals(name, "metadata")) {
+    // Calibre metadata wins when both forms exist. An untyped EPUB 3
+    // collection is accepted because many exporters omit collection-type; an
+    // explicitly non-series collection is not presented as a book series.
+    if (self->series.empty() && !self->collectionName.empty() &&
+        (!self->collectionTypeSeen || self->collectionIsSeries)) {
+      self->series = std::move(self->collectionName);
+      self->seriesIndex = std::move(self->collectionPosition);
+    }
     self->state = IN_PACKAGE;
     self->metadataComplete = true;
     return;

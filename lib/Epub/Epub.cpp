@@ -141,6 +141,8 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const 
   bookMetadata.title = utf8ComposeNfc(opfParser.title);
   bookMetadata.author = utf8ComposeNfc(opfParser.author);
   bookMetadata.language = opfParser.language;
+  bookMetadata.series = utf8ComposeNfc(opfParser.series);
+  bookMetadata.seriesIndex = opfParser.seriesIndex;
 
   if (metadataOnly) {
     LOG_DBG("EBP", "Successfully parsed package metadata");
@@ -662,6 +664,35 @@ bool Epub::loadMetadata(std::string& title, std::string& author) {
 
   title = std::move(metadata.title);
   author = std::move(metadata.author);
+  return true;
+}
+
+bool Epub::loadMetadata(std::string& title, std::string& author, std::string& series, std::string& seriesIndex) {
+  title.clear();
+  author.clear();
+  series.clear();
+  seriesIndex.clear();
+
+  // book.bin v10 predates series metadata. Read only the OPF metadata block;
+  // the parser stops before the manifest, so this does not build spine, TOC,
+  // CSS, cover, or section caches.
+  ZipFile zip(filepath);
+  if (!zip.open()) {
+    LOG_DBG("EBP", "Could not open ePub for series metadata: %s", filepath.c_str());
+    return false;
+  }
+
+  BookMetadataCache::BookMetadata metadata;
+  const bool loaded =
+      parseContentOpf(metadata, /*writeSpineEntries=*/false, /*shouldCancel=*/nullptr, /*cancelCtx=*/nullptr,
+                      /*metadataOnly=*/true, &zip);
+  zip.close();
+  if (!loaded) return false;
+
+  title = std::move(metadata.title);
+  author = std::move(metadata.author);
+  series = std::move(metadata.series);
+  seriesIndex = std::move(metadata.seriesIndex);
   return true;
 }
 

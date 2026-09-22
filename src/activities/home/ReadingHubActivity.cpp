@@ -11,6 +11,7 @@
 
 #include "ReadingStatsStore.h"
 #include "RecentBooksStore.h"
+#include "SeriesMetadata.h"
 #include "activities/ActivityManager.h"
 #include "components/UITheme.h"
 
@@ -96,11 +97,22 @@ int ReadingHubActivity::buildRows(std::array<ReadingHubRow, MAX_ROWS>& rows, Row
   }
   snprintf(text.completedStatus, sizeof(text.completedStatus), tr(STR_HUB_COMPLETED_COUNT),
            static_cast<unsigned>(completedBookCount));
+  if (currentBook) {
+    if (!currentBook->series.empty() && currentBook->seriesPosition > 0) {
+      char position[12];
+      series_metadata::formatPosition(currentBook->seriesPosition, position, sizeof(position));
+      snprintf(text.currentStatus, sizeof(text.currentStatus), tr(STR_SERIES_BOOK_FORMAT), currentBook->series.c_str(),
+               position);
+    } else {
+      snprintf(text.currentStatus, sizeof(text.currentStatus), "%s",
+               currentBook->series.empty() ? currentBook->author.c_str() : currentBook->series.c_str());
+    }
+  }
 
   switch (section) {
     case Section::NOW:
       rows[0] = {currentBook ? currentBook->title.c_str() : tr(STR_NO_OPEN_BOOK),
-                 currentBook ? currentBook->author.c_str() : tr(STR_START_READING)};
+                 currentBook ? text.currentStatus : tr(STR_START_READING)};
       rows[1] = {tr(STR_HUB_OPEN_QUEUE), text.queueStatus};
       rows[2] = {tr(STR_HUB_COMPLETED_BOOKS), text.completedStatus};
       return 3;

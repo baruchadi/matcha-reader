@@ -17,6 +17,10 @@ class BookMetadataCache {
     std::string language;
     std::string coverItemHref;
     std::string textReferenceHref;
+    // Series values are used by metadata-only catalog scans. They are not part
+    // of book.bin v10, avoiding a full reading-cache invalidation for UI data.
+    std::string series;
+    std::string seriesIndex;
   };
 
   struct SpineEntry {

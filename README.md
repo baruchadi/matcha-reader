@@ -79,6 +79,10 @@ first visit, with progress as a badge. Manga sits beside EPUBs. A **Shelves** ta
 keeps completed titles together as a compact achievement shelf. A **Queue** tab keeps up to 32 books in the exact
 order you plan to read them.
 
+EPUB series metadata is shown beneath each cover as the series name and book number. Series members stay together and
+are ordered by volume in the active grid and inside shelves, including Completed. The Queue keeps the exact order you
+chose, while still showing the same series label.
+
 Long-press a cover to add or remove it from the queue, move a queued book earlier or later, mark it completed or
 unfinished, or open its reading stats. Button-device users can set **Short Power Button Click** to **Book Actions** for
 one-click access to the same menu. Completion extends the same reading-history record used when a reader reaches the

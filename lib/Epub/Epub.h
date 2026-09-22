@@ -62,6 +62,7 @@ class Epub {
   bool load(bool buildIfMissing = true, bool skipLoadingCss = false, BmpConvertCancelFn shouldCancel = nullptr,
             void* cancelCtx = nullptr);
   bool loadMetadata(std::string& title, std::string& author);
+  bool loadMetadata(std::string& title, std::string& author, std::string& series, std::string& seriesIndex);
   bool clearCache() const;
   void setupCacheDir() const;
   const std::string& getCachePath() const;

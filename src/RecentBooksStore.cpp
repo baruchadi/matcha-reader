@@ -69,6 +69,9 @@ void RecentBooksStore::toJson(JsonDocument& doc) const {
     obj["title"] = book.title;
     obj["author"] = book.author;
     obj["coverBmpPath"] = book.coverBmpPath;
+    obj["series"] = book.series;
+    obj["seriesPosition"] = book.seriesPosition;
+    obj["seriesMetadataScanned"] = book.seriesMetadataScanned;
   }
 }
 
@@ -87,6 +90,9 @@ bool RecentBooksStore::fromJson(JsonVariantConst doc, const size_t maxBooks) {
     book.title = obj["title"] | "";
     book.author = obj["author"] | "";
     book.coverBmpPath = obj["coverBmpPath"] | "";
+    book.series = obj["series"] | "";
+    book.seriesPosition = obj["seriesPosition"] | 0;
+    book.seriesMetadataScanned = obj["seriesMetadataScanned"] | false;
     if (!coverPathResolvable(book.coverBmpPath)) {
       LOG_DBG("RBS", "Dropping unresolvable cover path %s", book.coverBmpPath.c_str());
       book.coverBmpPath.clear();
@@ -132,6 +138,19 @@ void RecentBooksStore::updateBook(const std::string& path, const std::string& ti
     book.coverBmpPath = coverBmpPath;
     saveToFile();
   }
+}
+
+void RecentBooksStore::updateBookData(const RecentBook& updated) {
+  auto it = std::find_if(recentBooks.begin(), recentBooks.end(),
+                         [&](const RecentBook& book) { return book.path == updated.path; });
+  if (it == recentBooks.end()) return;
+  it->title = updated.title;
+  it->author = updated.author;
+  it->coverBmpPath = updated.coverBmpPath;
+  it->series = updated.series;
+  it->seriesPosition = updated.seriesPosition;
+  it->seriesMetadataScanned = updated.seriesMetadataScanned;
+  saveToFile();
 }
 
 bool RecentBooksStore::removeByPath(const std::string& path) {
@@ -201,10 +220,14 @@ RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
     // Handle XTC file
     Xtc xtc(path, "/.crosspoint");
     if (xtc.load()) {
-      return RecentBook{path, xtc.getTitle(), xtc.getAuthor(), xtc.getThumbBmpPath()};
+      RecentBook book{path, xtc.getTitle(), xtc.getAuthor(), xtc.getThumbBmpPath()};
+      book.seriesMetadataScanned = true;
+      return book;
     }
   } else if (FsHelpers::hasTxtExtension(lastBookFileName) || FsHelpers::hasMarkdownExtension(lastBookFileName)) {
-    return RecentBook{path, lastBookFileName, "", ""};
+    RecentBook book{path, lastBookFileName, "", ""};
+    book.seriesMetadataScanned = true;
+    return book;
   }
   return RecentBook{path, "", "", ""};
 }
@@ -231,6 +254,9 @@ bool RecentBooksStore::saveBooksToPath(const std::vector<RecentBook>& books, con
       record["title"] = book.title;
       record["author"] = book.author;
       record["coverBmpPath"] = book.coverBmpPath;
+      record["series"] = book.series;
+      record["seriesPosition"] = book.seriesPosition;
+      record["seriesMetadataScanned"] = book.seriesMetadataScanned;
       serializeJson(record, output);
     }
 

@@ -22,6 +22,7 @@ class ContentOpfParser final : public Print {
     IN_SPINE,
     IN_GUIDE,
   };
+  enum class MetaTextKind : uint8_t { None, CollectionName, CollectionType, CollectionPosition };
 
   const std::string& cachePath;
   const std::string& baseContentPath;
@@ -39,6 +40,13 @@ class ContentOpfParser final : public Print {
   // separation as element state rather than inferring either from callbacks.
   bool metadataSpacePending = false;
   bool authorSeparatorPending = false;
+  MetaTextKind metaTextKind = MetaTextKind::None;
+  std::string metaText;
+  std::string collectionId;
+  std::string collectionName;
+  std::string collectionPosition;
+  bool collectionTypeSeen = false;
+  bool collectionIsSeries = false;
 
   // Index for fast idref→href lookup (binary search over .items.bin)
   struct ItemIndexEntry {
@@ -73,6 +81,8 @@ class ContentOpfParser final : public Print {
   std::string title;
   std::string author;
   std::string language;
+  std::string series;
+  std::string seriesIndex;
   std::string tocNcxPath;
   std::string tocNavPath;  // EPUB 3 nav document path
   std::string coverItemHref;

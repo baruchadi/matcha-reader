@@ -21,6 +21,7 @@
 #include "MappedInputManager.h"
 #include "ReadingStatsStore.h"
 #include "RecentBooksStore.h"
+#include "SeriesMetadata.h"
 #include "activities/home/BookStatsActivity.h"
 #include "activities/home/EpubProgressUtil.h"
 #include "activities/home/XtcProgressUtil.h"
@@ -134,6 +135,8 @@ void CoverLibraryActivity::runCoverJob() {
   result.book = coverJob_.book;
   result.fileSize = coverJob_.fileSize;
   result.modifiedStamp = coverJob_.modifiedStamp;
+  result.metadataRequested = coverJob_.fetchSeriesMetadata;
+  result.coverAttempted = coverJob_.targetHeights[0] > 0;
 
   const bool isEpub = FsHelpers::hasEpubExtension(result.book.path);
   const bool isXtc = FsHelpers::hasXtcExtension(result.book.path);
@@ -149,7 +152,21 @@ void CoverLibraryActivity::runCoverJob() {
     if (result.hasGridThumb) result.book.coverBmpPath = mangaBook.getThumbBmpPath();
   } else if (isEpub) {
     Epub epub(result.book.path, "/.crosspoint");
-    const bool loaded = epub.load(true, true, &coverWorkerShouldCancel, this);
+    if (coverJob_.fetchSeriesMetadata) {
+      std::string title;
+      std::string author;
+      std::string series;
+      std::string seriesIndex;
+      if (epub.loadMetadata(title, author, series, seriesIndex)) {
+        if (!title.empty()) result.book.title = std::move(title);
+        if (!author.empty()) result.book.author = std::move(author);
+        result.book.series = std::move(series);
+        result.book.seriesPosition = series_metadata::parsePosition(seriesIndex);
+        result.book.seriesMetadataScanned = true;
+        result.metadataLoaded = true;
+      }
+    }
+    const bool loaded = !result.coverAttempted || epub.load(true, true, &coverWorkerShouldCancel, this);
     // Every requested height, off the one load. A cancel between sizes still leaves the ones
     // already written on disk, so the next pass has less to do rather than starting over.
     for (const int targetHeight : coverJob_.targetHeights) {
@@ -158,7 +175,8 @@ void CoverLibraryActivity::runCoverJob() {
       if (thumbHeightValid(epub.getThumbBmpPath(targetHeight), targetHeight)) continue;
       epub.generateThumbBmp(targetHeight, &coverWorkerShouldCancel, this);
     }
-    result.hasGridThumb = loaded && thumbHeightValid(epub.getThumbBmpPath(coverJob_.gridHeight), coverJob_.gridHeight);
+    result.hasGridThumb = result.coverAttempted && loaded &&
+                          thumbHeightValid(epub.getThumbBmpPath(coverJob_.gridHeight), coverJob_.gridHeight);
     if (result.hasGridThumb) result.book.coverBmpPath = epub.getThumbBmpPath();
     if (loaded && !epub.getTitle().empty()) result.book.title = epub.getTitle();
     // Separate "there is nothing to render" from "it did not fit right now", the same split
@@ -166,13 +184,15 @@ void CoverLibraryActivity::runCoverJob() {
     // permanent fact worth recording; a failure with a cover present must stay retryable, or one
     // low-heap moment costs the cover forever. Requires !cancelled: a cancelled load leaves the
     // metadata cache unpopulated, which hasCoverImage() cannot distinguish from a coverless book.
-    result.coverKnownAbsent = loaded && !result.hasGridThumb && !coverWorkerShouldCancel(this) && !epub.hasCoverImage();
+    result.coverKnownAbsent = result.coverAttempted && loaded && !result.hasGridThumb &&
+                              !coverWorkerShouldCancel(this) && !epub.hasCoverImage();
     // The other permanent outcome: the book HAS a cover, but it can never be converted by this
     // build (source beyond the JPEG decoder's dimension limits). Distinguished at the source by
     // the converter -- a low-heap moment, a cancellation and a decode error all leave this false
     // and stay retryable. Without it an unconvertible cover is re-extracted and re-decoded on
     // every Library pass forever, which on a tight device is a hot loop of SD reads (X3 report).
-    if (loaded && !result.hasGridThumb && !coverWorkerShouldCancel(this) && epub.coverUnsupported()) {
+    if (result.coverAttempted && loaded && !result.hasGridThumb && !coverWorkerShouldCancel(this) &&
+        epub.coverUnsupported()) {
       LOG_ERR("RBA", "Cover unconvertible for %s; recording as coverless", result.book.path.c_str());
       result.coverKnownAbsent = true;
     }
@@ -181,7 +201,7 @@ void CoverLibraryActivity::runCoverJob() {
     // entry is keyed on size+stamp -- so recording "no cover" would outlive the credential being
     // added and the cover would never come back. It stays retryable; what it must not do is
     // stall the scan, which the completed flag below handles.
-    if (loaded && !result.hasGridThumb && !result.coverKnownAbsent) {
+    if (result.coverAttempted && loaded && !result.hasGridThumb && !result.coverKnownAbsent) {
       LOG_ERR("RBA", "Cover thumb failed for %s; will retry", result.book.path.c_str());
     }
   } else {
@@ -214,7 +234,7 @@ bool CoverLibraryActivity::postCoverJob(CoverJob&& job) {
   if (!coverWorkerTask_ || coverWorkerBusy_.load(std::memory_order_acquire) || coverResult_.pending) return false;
   // Preserves the old "no explicit target means the grid height" fallback in one place, now that
   // callers queue a set rather than picking a single size.
-  if (job.targetHeights[0] == 0) job.addTargetHeight(job.gridHeight);
+  if (job.targetHeights[0] == 0 && !job.fetchSeriesMetadata) job.addTargetHeight(job.gridHeight);
   coverJob_ = std::move(job);
   coverResult_ = CoverResult{};
   coverWorkerCancelRequested_ = false;
@@ -251,7 +271,7 @@ int CoverLibraryActivity::getCellHeight(int cellWidth) const {
   int coverWidth = cellWidth - 2 * COVER_PADDING;
   int coverHeight = coverWidth * COVER_ASPECT_DEN / COVER_ASPECT_NUM;
   int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
-  return COVER_PADDING + coverHeight + CELL_TEXT_GAP + lineHeight + COVER_PADDING;
+  return COVER_PADDING + coverHeight + CELL_TEXT_GAP + lineHeight * 2 + COVER_PADDING;
 }
 
 int CoverLibraryActivity::getVisibleRows(int cellHeight, int contentHeight) const {
@@ -401,6 +421,7 @@ void CoverLibraryActivity::rebuildBookViews(const bool pruneMissing) {
       activeBookIndices.push_back(static_cast<uint16_t>(i));
     }
   }
+  series_metadata::groupIndices(recentBooks, activeBookIndices);
   for (const auto& path : queue.paths()) {
     const auto it =
         std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) { return book.path == path; });
@@ -565,7 +586,15 @@ bool CoverLibraryActivity::stepLibraryScan() {
         live.coverBmpPath = book.coverBmpPath;
         changed = true;
       }
+      if (book.seriesMetadataScanned &&
+          (!live.seriesMetadataScanned || live.series != book.series || live.seriesPosition != book.seriesPosition)) {
+        live.series = book.series;
+        live.seriesPosition = book.seriesPosition;
+        live.seriesMetadataScanned = true;
+        changed = true;
+      }
       if (changed) {
+        rebuildBookViews();
         if (shelvesLoaded) loadShelves();
         lastRendered.valid = false;
       }
@@ -579,18 +608,19 @@ bool CoverLibraryActivity::stepLibraryScan() {
     if (coverWorkerBusy_.load(std::memory_order_acquire)) return false;
     if (coverResult_.pending) {
       const bool matches = coverResult_.book.path == book.path;
-      if (matches && coverResult_.hasGridThumb) {
+      if (matches && (coverResult_.hasGridThumb || coverResult_.metadataLoaded)) {
         if (!publishBook(coverResult_.book)) return false;
-        RECENT_BOOKS.updateBook(coverResult_.book.path, coverResult_.book.title, coverResult_.book.author,
-                                coverResult_.book.coverBmpPath);
+        RECENT_BOOKS.updateBookData(coverResult_.book);
       }
-      if (matches && (FsHelpers::hasEpubExtension(book.path) || FsHelpers::hasXtcExtension(book.path))) {
+      if (matches && coverResult_.coverAttempted &&
+          (FsHelpers::hasEpubExtension(book.path) || FsHelpers::hasXtcExtension(book.path))) {
         recordIndexEntry(book.path, coverResult_.fileSize, coverResult_.modifiedStamp, thumbH,
                          coverResult_.hasGridThumb, coverResult_.coverKnownAbsent);
       }
       const bool completed = coverResult_.completed;
+      const bool needsCoverPass = coverResult_.metadataRequested && coverResult_.metadataLoaded;
       coverResult_.pending = false;
-      if (matches && completed) scan_.thumbIndex++;
+      if (matches && completed && !needsCoverPass) scan_.thumbIndex++;
       return false;
     }
     // A [HEIGHT]-templated path does NOT mean the thumb exists at the height this theme asks
@@ -607,6 +637,14 @@ bool CoverLibraryActivity::stepLibraryScan() {
     const bool isXtc = FsHelpers::hasXtcExtension(book.path);
     const bool isText = FsHelpers::hasTxtExtension(book.path) || FsHelpers::hasMarkdownExtension(book.path);
     const bool isMangaEntry = !isEpub && !isXtc && !isText;
+    if (isEpub && !book.seriesMetadataScanned) {
+      CoverJob job;
+      job.book = book;
+      job.gridHeight = thumbH;
+      job.fetchSeriesMetadata = true;
+      if (!postCoverJob(std::move(job))) scan_.thumbIndex++;
+      return false;
+    }
     const bool coverIsRawImage =
         isMangaEntry && !book.coverBmpPath.empty() && !coverIsTemplate &&
         (FsHelpers::hasJpgExtension(book.coverBmpPath) || FsHelpers::hasPngExtension(book.coverBmpPath) ||
@@ -799,6 +837,7 @@ void CoverLibraryActivity::scanDirectoryEntry() {
       return;
     }
     RecentBook book{fullPath, name, "", ""};
+    book.seriesMetadataScanned = true;
     if (const RecentBook* cached = scan_.cachedBookLookup.find(std::string_view{fullPath})) book = *cached;
     scan_.results.push_back(std::move(book));
     return;
@@ -813,6 +852,7 @@ void CoverLibraryActivity::scanDirectoryEntry() {
 
   const auto dot = filename.find_last_of('.');
   RecentBook book{fullPath, std::string(dot == std::string_view::npos ? filename : filename.substr(0, dot)), "", ""};
+  book.seriesMetadataScanned = !FsHelpers::hasEpubExtension(filename);
   if (const RecentBook* cached = scan_.cachedBookLookup.find(std::string_view{fullPath})) book = *cached;
   scan_.results.push_back(std::move(book));
 }
@@ -833,7 +873,8 @@ bool CoverLibraryActivity::applyLibraryScan() {
       const auto& fresh = scan_.results[i];
       const auto& old = recentBooks[i];
       if (fresh.path != old.path || fresh.title != old.title || fresh.author != old.author ||
-          fresh.coverBmpPath != old.coverBmpPath) {
+          fresh.coverBmpPath != old.coverBmpPath || fresh.series != old.series ||
+          fresh.seriesPosition != old.seriesPosition || fresh.seriesMetadataScanned != old.seriesMetadataScanned) {
         changed = true;
         break;
       }
@@ -1005,11 +1046,22 @@ void CoverLibraryActivity::loadShelfBooks(const int shelfIndex) {
   for (const auto& book : recentBooks) {
     const bool completed = READING_STATS_STORE.isBookFinished(book.path);
     if (shelf.completed ? !completed : (completed || libraryFolderPath(book.path) != shelf.folderPath)) continue;
-    shelfBooks.push_back(ShelfBook{book.path, book.title, book.coverBmpPath, completed});
+    shelfBooks.push_back(
+        ShelfBook{book.path, book.title, book.coverBmpPath, book.series, book.seriesPosition, completed});
   }
 
-  std::sort(shelfBooks.begin(), shelfBooks.end(),
-            [](const ShelfBook& a, const ShelfBook& b) { return a.title < b.title; });
+  std::sort(shelfBooks.begin(), shelfBooks.end(), [](const ShelfBook& a, const ShelfBook& b) {
+    const std::string& aKey = a.series.empty() ? a.title : a.series;
+    const std::string& bKey = b.series.empty() ? b.title : b.series;
+    if (aKey != bKey) return aKey < bKey;
+    if (a.series.empty() != b.series.empty()) return !a.series.empty();
+    if (!a.series.empty() && a.series == b.series && a.seriesPosition != b.seriesPosition) {
+      if (a.seriesPosition == 0) return false;
+      if (b.seriesPosition == 0) return true;
+      return a.seriesPosition < b.seriesPosition;
+    }
+    return a.title < b.title;
+  });
 
   shelfBookProgress.resize(shelfBooks.size(), BookProgress{PROGRESS_PENDING});
   shelfProgressWarmCursor_ = 0;
@@ -1578,6 +1630,7 @@ void CoverLibraryActivity::drawGridSelectionBorder(const int cellX, const int ce
 
 void CoverLibraryActivity::drawGridCell(const int cellX, const int cellY, const int cellWidth, const int cellHeight,
                                         const std::string& coverBmpPath, const std::string& title,
+                                        const std::string& series, const uint16_t seriesPosition,
                                         const int progressPercent, const bool selected, const bool drawTitle) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int coverWidth = cellWidth - 2 * COVER_PADDING;
@@ -1656,12 +1709,24 @@ void CoverLibraryActivity::drawGridCell(const int cellX, const int cellY, const 
     renderer.drawText(SMALL_FONT_ID, badgeX + 6, badgeY + 2, badgeBuf, false);
   }
 
-  // Title below the cover, single line, ellipsis-truncated. The peek row skips this: its
-  // title band lies under the button hints, so measuring/truncating it would be wasted work.
+  // Title and optional series subtitle below the cover. The peek row skips both:
+  // its label band lies under the button hints, so measuring it would be wasted work.
   const int labelY = coverY + coverHeight + CELL_TEXT_GAP;
   if (drawTitle && !title.empty()) {
     const std::string line = renderer.truncatedText(SMALL_FONT_ID, title.c_str(), coverWidth);
     renderer.drawText(SMALL_FONT_ID, coverX, labelY, line.c_str(), true);
+  }
+  if (drawTitle && !series.empty()) {
+    char seriesLabel[160];
+    if (seriesPosition > 0) {
+      char position[12];
+      series_metadata::formatPosition(seriesPosition, position, sizeof(position));
+      snprintf(seriesLabel, sizeof(seriesLabel), tr(STR_SERIES_BOOK_FORMAT), series.c_str(), position);
+    } else {
+      snprintf(seriesLabel, sizeof(seriesLabel), "%s", series.c_str());
+    }
+    const std::string line = renderer.truncatedText(SMALL_FONT_ID, seriesLabel, coverWidth);
+    renderer.drawText(SMALL_FONT_ID, coverX, labelY + lineHeight, line.c_str(), true);
   }
 }
 
@@ -1710,6 +1775,8 @@ void CoverLibraryActivity::renderBooksTab(int contentTop, int contentHeight) {
     for (size_t idx = window.first; idx < window.titledEnd; idx++) {
       prewarmBuf += recentBooks[displayIndices[idx]].title;
       prewarmBuf += ' ';
+      prewarmBuf += recentBooks[displayIndices[idx]].series;
+      prewarmBuf += ' ';
     }
     renderer.prewarmText(SMALL_FONT_ID, prewarmBuf.c_str(), 1 << EpdFontFamily::REGULAR);
   }
@@ -1721,8 +1788,9 @@ void CoverLibraryActivity::renderBooksTab(int contentTop, int contentHeight) {
     const int cellX = metrics.contentSidePadding + col * cellWidth;
     const int cellY = contentTop + row * rowStride;
     const auto& book = recentBooks[displayIndices[idx]];
-    drawGridCell(cellX, cellY, cellWidth, cellHeight, book.coverBmpPath, book.title, displayedBookProgressAt(idx),
-                 selectorVisible && idx == selectedItem, /*drawTitle=*/idx <= titledLastIdx);
+    drawGridCell(cellX, cellY, cellWidth, cellHeight, book.coverBmpPath, book.title, book.series, book.seriesPosition,
+                 displayedBookProgressAt(idx), selectorVisible && idx == selectedItem,
+                 /*drawTitle=*/idx <= titledLastIdx);
   }
 
   // Release the page slots claimed by the prewarm above -- see the matching comment in
@@ -1890,6 +1958,8 @@ void CoverLibraryActivity::renderShelfBooksView(int contentTop, int contentHeigh
     for (int idx = firstIdx; idx <= titledLastIdx; idx++) {
       prewarmBuf += shelfBooks[idx].title;
       prewarmBuf += ' ';
+      prewarmBuf += shelfBooks[idx].series;
+      prewarmBuf += ' ';
     }
     renderer.prewarmText(SMALL_FONT_ID, prewarmBuf.c_str(), 1 << EpdFontFamily::REGULAR);
   }
@@ -1903,7 +1973,8 @@ void CoverLibraryActivity::renderShelfBooksView(int contentTop, int contentHeigh
     const int pct = shelfBooks[idx].completed
                         ? 100
                         : (idx < static_cast<int>(shelfBookProgress.size()) ? shelfBookProgress[idx].percent : -1);
-    drawGridCell(cellX, cellY, cellWidth, cellHeight, shelfBooks[idx].coverBmpPath, shelfBooks[idx].title, pct,
+    drawGridCell(cellX, cellY, cellWidth, cellHeight, shelfBooks[idx].coverBmpPath, shelfBooks[idx].title,
+                 shelfBooks[idx].series, shelfBooks[idx].seriesPosition, pct,
                  selectorVisible && idx == shelfContentIndex, /*drawTitle=*/idx <= titledLastIdx);
   }
 

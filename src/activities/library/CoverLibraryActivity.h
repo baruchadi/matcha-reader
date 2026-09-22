@@ -73,6 +73,8 @@ class CoverLibraryActivity final : public Activity {
     std::string path;
     std::string title;
     std::string coverBmpPath;
+    std::string series;
+    uint16_t seriesPosition = 0;
     bool completed = false;
   };
   std::vector<ShelfBook> shelfBooks;
@@ -148,7 +150,8 @@ class CoverLibraryActivity final : public Activity {
 
   // Shared cell/row painters, used by both the full renders above and the partial fast path.
   void drawGridCell(int cellX, int cellY, int cellWidth, int cellHeight, const std::string& coverBmpPath,
-                    const std::string& title, int progressPercent, bool selected, bool drawTitle = true);
+                    const std::string& title, const std::string& series, uint16_t seriesPosition, int progressPercent,
+                    bool selected, bool drawTitle = true);
   void drawShelfRow(int shelfIdx, int itemY, bool selected);
 
   // Grid selection indicator: a 2px border ring just OUTSIDE the cover box, entirely within the
@@ -249,6 +252,7 @@ class CoverLibraryActivity final : public Activity {
     int targetHeights[MAX_TARGET_HEIGHTS] = {0, 0, 0};
     uint32_t fileSize = 0;
     uint32_t modifiedStamp = 0;
+    bool fetchSeriesMetadata = false;
 
     void addTargetHeight(const int h) {
       if (h <= 0) return;
@@ -269,6 +273,9 @@ class CoverLibraryActivity final : public Activity {
     // hasGridThumb=false, which usually means the conversion did not fit in the heap this time
     // and must be retried -- conflating the two costs a cover forever (see Epub::hasCoverImage).
     bool coverKnownAbsent = false;
+    bool metadataRequested = false;
+    bool metadataLoaded = false;
+    bool coverAttempted = false;
     RecentBook book;
     uint32_t fileSize = 0;
     uint32_t modifiedStamp = 0;
