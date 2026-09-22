@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "LibraryBookInput.h"
+#include "LibraryCachePolicy.h"
 #include "LibraryPerformance.h"
 #include "ReadingStatsStore.h"
 #include "RecentBooksStore.h"
@@ -304,6 +305,7 @@ void ReadingHubActivity::loadShelves() {
   JsonDocument record;
   bool first = true;
   bool hasMoreShelves = false;
+  size_t admittedCacheBooks = 0;
   uint16_t catalogBookCount = 0;
   std::array<uint8_t, RecentBooksStore::MAX_RECENT_BOOKS> recentSeen{};
   const auto& recents = RECENT_BOOKS.getBooks();
@@ -315,10 +317,10 @@ void ReadingHubActivity::loadShelves() {
       return;
     }
 
-    const std::string folder(libraryFolderPath(path));
+    const std::string_view folder = libraryFolderPath(path);
     int shelfIndex = -1;
     for (int candidate = 0; candidate < shelfPreviewCount; candidate++) {
-      if (shelves[candidate].path == folder) {
+      if (std::string_view{shelves[candidate].path} == folder) {
         shelfIndex = candidate;
         break;
       }
@@ -336,7 +338,7 @@ void ReadingHubActivity::loadShelves() {
     }
 
     shelfIndex = shelfPreviewCount++;
-    shelves[shelfIndex].path = folder;
+    shelves[shelfIndex].path.assign(folder);
     shelves[shelfIndex].name = shelfName(folder);
     shelves[shelfIndex].bookCount = 1;
     if (!cover.empty() && cover.size() <= 500) {
@@ -373,14 +375,19 @@ void ReadingHubActivity::loadShelves() {
     first = false;
     const char* path = record["path"] | "";
     const char* cover = record["coverBmpPath"] | "";
-    const size_t pathLength = strnlen(path, 501);
-    if (pathLength == 0 || pathLength > 500) continue;
+    const size_t pathLength = strnlen(path, library_cache::MAX_PATH_LENGTH + 1);
+    if (pathLength > library_cache::MAX_PATH_LENGTH || !library_cache::admitsPath(std::string_view{path, pathLength})) {
+      continue;
+    }
+    if (admittedCacheBooks >= library_cache::MAX_BOOKS) continue;
+    admittedCacheBooks++;
     const std::string_view pathView{path, pathLength};
     for (size_t recentIndex = 0; recentIndex < recents.size() && recentIndex < recentSeen.size(); recentIndex++) {
       if (std::string_view{recents[recentIndex].path} == pathView) recentSeen[recentIndex] = 1;
     }
-    const size_t coverLength = strnlen(cover, 501);
-    addBook(pathView, coverLength <= 500 ? std::string_view{cover, coverLength} : std::string_view{});
+    const size_t coverLength = strnlen(cover, library_cache::MAX_PATH_LENGTH + 1);
+    addBook(pathView,
+            coverLength <= library_cache::MAX_PATH_LENGTH ? std::string_view{cover, coverLength} : std::string_view{});
   }
   file.close();
   if (!parseOk) {

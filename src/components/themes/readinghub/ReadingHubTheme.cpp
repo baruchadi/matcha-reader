@@ -234,11 +234,13 @@ void drawNow(const GfxRenderer& renderer, const Rect rect, const ReadingHubScree
 
 void drawLibrary(const GfxRenderer& renderer, const Rect rect, const ReadingHubScreen& screen) {
   renderer.drawText(UI_10_FONT_ID, rect.x, rect.y, tr(STR_HUB_YOUR_SHELVES), true, EpdFontFamily::BOLD);
-  char libraryStatus[48];
-  snprintf(libraryStatus, sizeof(libraryStatus), tr(STR_HUB_LIBRARY_COUNT),
-           static_cast<unsigned>(screen.libraryTotalCount));
-  const int statusWidth = renderer.getTextWidth(SMALL_FONT_ID, libraryStatus);
-  renderer.drawText(SMALL_FONT_ID, rect.x + rect.width - statusWidth, rect.y + 2, libraryStatus);
+  if (screen.shelfSummaryAvailable) {
+    char libraryStatus[48];
+    snprintf(libraryStatus, sizeof(libraryStatus), tr(STR_HUB_LIBRARY_COUNT),
+             static_cast<unsigned>(screen.libraryTotalCount));
+    const int statusWidth = renderer.getTextWidth(SMALL_FONT_ID, libraryStatus);
+    renderer.drawText(SMALL_FONT_ID, rect.x + rect.width - statusWidth, rect.y + 2, libraryStatus);
+  }
 
   if (!screen.shelves || screen.shelfPreviewCount <= 0) {
     const bool selected = screen.selectedIndex == 0;

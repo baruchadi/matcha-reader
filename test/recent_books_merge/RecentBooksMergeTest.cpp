@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "src/LibraryCachePolicy.h"
 #include "src/RecentBook.h"
 #include "src/SeriesMetadata.h"
 
@@ -16,6 +17,13 @@ TEST(RecentBooksMerge, KeepsRecentsFirstWithoutDuplicatesOrLosingScannedCovers) 
   EXPECT_EQ(catalog[0].coverBmpPath, "cover-b");
   EXPECT_EQ(catalog[1].path, "/new.epub");
   EXPECT_EQ(catalog[2].path, "/a.epub");
+}
+
+TEST(LibraryCachePolicy, SharesExactCatalogAndPathBoundaries) {
+  EXPECT_EQ(library_cache::MAX_BOOKS, 2048u);
+  EXPECT_FALSE(library_cache::admitsPath(""));
+  EXPECT_TRUE(library_cache::admitsPath(std::string(library_cache::MAX_PATH_LENGTH, 'a')));
+  EXPECT_FALSE(library_cache::admitsPath(std::string(library_cache::MAX_PATH_LENGTH + 1, 'a')));
 }
 
 TEST(RecentBooksMerge, KeepsScannedSeriesMetadataWhenRecentEntryIsOlder) {

@@ -9,6 +9,8 @@
 
 #include <algorithm>
 
+#include "LibraryCachePolicy.h"
+
 namespace {
 // [HEIGHT] is the ONLY placeholder this build knows how to fill (UITheme::getCoverThumbPath).
 // Older firmware wrote a [WIDTH]x[HEIGHT] template; substituting just [HEIGHT] leaves a literal
@@ -25,8 +27,6 @@ bool coverPathResolvable(const std::string& coverBmpPath) {
   }
   return rest.find('[') == std::string::npos && rest.find(']') == std::string::npos;
 }
-
-constexpr size_t LIBRARY_CACHE_MAX_BOOKS = 2048;
 
 class JsonFileReader {
  public:
@@ -87,6 +87,7 @@ bool RecentBooksStore::fromJson(JsonVariantConst doc, const size_t maxBooks) {
     if (recentBooks.size() >= maxBooks) break;
     RecentBook book;
     book.path = obj["path"] | "";
+    if (!library_cache::admitsPath(book.path)) continue;
     book.title = obj["title"] | "";
     book.author = obj["author"] | "";
     book.coverBmpPath = obj["coverBmpPath"] | "";
@@ -246,7 +247,10 @@ bool RecentBooksStore::saveBooksToPath(const std::vector<RecentBook>& books, con
 
     JsonDocument record;
     bool first = true;
+    size_t writtenBooks = 0;
     for (const auto& book : books) {
+      if (writtenBooks >= library_cache::MAX_BOOKS) break;
+      if (!library_cache::admitsPath(book.path)) continue;
       if (!first) output.write(static_cast<uint8_t>(','));
       first = false;
       record.clear();
@@ -258,6 +262,7 @@ bool RecentBooksStore::saveBooksToPath(const std::vector<RecentBook>& books, con
       record["seriesPosition"] = book.seriesPosition;
       record["seriesMetadataScanned"] = book.seriesMetadataScanned;
       serializeJson(record, output);
+      writtenBooks++;
     }
 
     constexpr char SUFFIX[] = "]}";
@@ -304,5 +309,5 @@ bool RecentBooksStore::loadFromPath(const char* path) {
     LOG_ERR("RBS", "JSON parse error in %s: %s", path, error.c_str());
     return false;
   }
-  return fromJson(doc.as<JsonVariantConst>(), LIBRARY_CACHE_MAX_BOOKS);
+  return fromJson(doc.as<JsonVariantConst>(), library_cache::MAX_BOOKS);
 }
