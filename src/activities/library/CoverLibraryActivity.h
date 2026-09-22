@@ -151,7 +151,7 @@ class CoverLibraryActivity final : public Activity {
   // Shared cell/row painters, used by both the full renders above and the partial fast path.
   void drawGridCell(int cellX, int cellY, int cellWidth, int cellHeight, const std::string& coverBmpPath,
                     const std::string& title, const std::string& series, uint16_t seriesPosition, int progressPercent,
-                    bool selected, bool drawTitle = true);
+                    uint8_t rating, bool selected, bool drawTitle = true);
   void drawShelfRow(int shelfIdx, int itemY, bool selected);
 
   // Grid selection indicator: a 2px border ring just OUTSIDE the cover box, entirely within the

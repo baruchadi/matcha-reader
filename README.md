@@ -91,7 +91,8 @@ remain available in **Shelves → Completed**.
 
 Completed books can be rated from one to five stars. The end-of-book screen offers **Rate This Book** immediately,
 and the same rating remains editable from Book Actions. A rating belongs to the completed status: marking the book
-unfinished clears it instead of creating a competing status record.
+unfinished clears it instead of creating a competing status record. Rated covers show a compact star-and-score badge
+inside the Completed achievement shelf.
 
 <p align="center"><img src="docs/images/screenshots/library.png" width="260" alt="Library grid with manga and EPUB covers side by side"></p>
 

@@ -42,6 +42,18 @@ constexpr uint32_t THUMB_IDLE_MS = 2000;
 constexpr size_t INDEX_IO_CHUNK_SIZE = 4096;
 constexpr uint32_t COVER_WORKER_STACK = 8192;
 
+void drawMiniStar(const GfxRenderer& renderer, const int centerX, const int centerY, const bool state) {
+  static constexpr int REL_X[10] = {0, 2, 6, 3, 4, 0, -4, -3, -6, -2};
+  static constexpr int REL_Y[10] = {-6, -2, -2, 1, 5, 3, 5, 1, -2, -2};
+  int xs[10];
+  int ys[10];
+  for (int i = 0; i < 10; i++) {
+    xs[i] = centerX + REL_X[i];
+    ys[i] = centerY + REL_Y[i];
+  }
+  renderer.fillPolygon(xs, ys, 10, state);
+}
+
 bool readExactChunked(HalFile& file, void* output, const size_t length) {
   auto* bytes = static_cast<uint8_t*>(output);
   size_t offset = 0;
@@ -1656,7 +1668,8 @@ void CoverLibraryActivity::drawGridSelectionBorder(const int cellX, const int ce
 void CoverLibraryActivity::drawGridCell(const int cellX, const int cellY, const int cellWidth, const int cellHeight,
                                         const std::string& coverBmpPath, const std::string& title,
                                         const std::string& series, const uint16_t seriesPosition,
-                                        const int progressPercent, const bool selected, const bool drawTitle) {
+                                        const int progressPercent, const uint8_t rating, const bool selected,
+                                        const bool drawTitle) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int coverWidth = cellWidth - 2 * COVER_PADDING;
   const int coverHeight = coverWidth * COVER_ASPECT_DEN / COVER_ASPECT_NUM;
@@ -1697,12 +1710,16 @@ void CoverLibraryActivity::drawGridCell(const int cellX, const int cellY, const 
   }
 
   // Progress badge on the cover (top-right, white on black): "NEW" for unstarted books,
-  // "Read" for finished ones, else the percentage. progressPercent < 0 means the idle-gated
-  // progress pass hasn't reached this book yet -- draw nothing rather than a wrong badge.
+  // "Read" for finished ones, a star + score when the finished book is rated, else the
+  // percentage. progressPercent < 0 means the idle-gated progress pass hasn't reached this book
+  // yet -- draw nothing rather than a wrong badge.
   if (progressPercent >= 0) {
     char badgeBuf[8];
+    const bool showRating = progressPercent >= 100 && rating >= 1 && rating <= 5;
     if (progressPercent <= 0) {
       snprintf(badgeBuf, sizeof(badgeBuf), "%s", tr(STR_BOOK_BADGE_NEW));
+    } else if (showRating) {
+      snprintf(badgeBuf, sizeof(badgeBuf), "%u", static_cast<unsigned int>(rating));
     } else if (progressPercent >= 100) {
       snprintf(badgeBuf, sizeof(badgeBuf), "%s", tr(STR_BOOK_BADGE_READ));
     } else {
@@ -1710,7 +1727,7 @@ void CoverLibraryActivity::drawGridCell(const int cellX, const int cellY, const 
     }
     const int badgeTextW = renderer.getTextWidth(SMALL_FONT_ID, badgeBuf);
     const int badgeH = renderer.getLineHeight(SMALL_FONT_ID) + 4;
-    const int badgeW = badgeTextW + 12;
+    const int badgeW = badgeTextW + 12 + (showRating ? 14 : 0);
     const int badgeX = coverX + coverWidth - badgeW;
     const int badgeY = coverY;
     // Black fill with a rounded bottom-left corner; pixels outside the arc stay untouched so
@@ -1731,7 +1748,12 @@ void CoverLibraryActivity::drawGridCell(const int cellX, const int cellY, const 
     // White border on the two exposed edges (left + bottom); top/right sit on the cover edge.
     renderer.drawLine(badgeX, badgeY, badgeX, arcCy, false);
     renderer.drawLine(arcCx, badgeY + badgeH - 1, badgeX + badgeW - 1, badgeY + badgeH - 1, false);
-    renderer.drawText(SMALL_FONT_ID, badgeX + 6, badgeY + 2, badgeBuf, false);
+    int badgeTextX = badgeX + 6;
+    if (showRating) {
+      drawMiniStar(renderer, badgeX + 10, badgeY + badgeH / 2, false);
+      badgeTextX += 14;
+    }
+    renderer.drawText(SMALL_FONT_ID, badgeTextX, badgeY + 2, badgeBuf, false);
   }
 
   // Title and optional series subtitle below the cover. The peek row skips both:
@@ -1814,7 +1836,7 @@ void CoverLibraryActivity::renderBooksTab(int contentTop, int contentHeight) {
     const int cellY = contentTop + row * rowStride;
     const auto& book = recentBooks[displayIndices[idx]];
     drawGridCell(cellX, cellY, cellWidth, cellHeight, book.coverBmpPath, book.title, book.series, book.seriesPosition,
-                 displayedBookProgressAt(idx), selectorVisible && idx == selectedItem,
+                 displayedBookProgressAt(idx), 0, selectorVisible && idx == selectedItem,
                  /*drawTitle=*/idx <= titledLastIdx);
   }
 
@@ -2000,7 +2022,8 @@ void CoverLibraryActivity::renderShelfBooksView(int contentTop, int contentHeigh
                         : (idx < static_cast<int>(shelfBookProgress.size()) ? shelfBookProgress[idx].percent : -1);
     drawGridCell(cellX, cellY, cellWidth, cellHeight, shelfBooks[idx].coverBmpPath, shelfBooks[idx].title,
                  shelfBooks[idx].series, shelfBooks[idx].seriesPosition, pct,
-                 selectorVisible && idx == shelfContentIndex, /*drawTitle=*/idx <= titledLastIdx);
+                 READING_STATS_STORE.getBookRating(shelfBooks[idx].path), selectorVisible && idx == shelfContentIndex,
+                 /*drawTitle=*/idx <= titledLastIdx);
   }
 
   // Release the page slots claimed by the prewarm above -- see the matching comment in
