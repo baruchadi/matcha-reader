@@ -10,14 +10,15 @@
 #include <Memory.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <functional>
+#include <memory>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include "LibraryBookInput.h"
-#include "LibraryPerformance.h"
 #include "ReadingStatsStore.h"
 #include "RecentBooksStore.h"
 #include "SeriesMetadata.h"
@@ -31,7 +32,6 @@
 
 namespace {
 constexpr char LIBRARY_INDEX_LOG_TAG[] = "HUB";
-constexpr char LIBRARY_CACHE_JSON[] = "/.crosspoint/library_cache.json";
 constexpr unsigned long LONG_PRESS_MS = 1000;
 
 std::string fallbackTitle(const std::string& path) {
@@ -52,9 +52,19 @@ int progressForBook(const RecentBook& book) {
 }
 
 std::string shelfName(const std::string_view path) {
-  if (path == "/") return "Unsorted";
+  if (path == "/") return tr(STR_HUB_UNSORTED);
   const size_t slash = path.find_last_of('/');
   return std::string(slash == std::string_view::npos ? path : path.substr(slash + 1));
+}
+
+std::string coverTemplateForPath(const std::string& path) {
+  const std::string hash = std::to_string(std::hash<std::string>{}(path));
+  if (FsHelpers::hasEpubExtension(path)) return "/.crosspoint/epub_" + hash + "/thumb_[HEIGHT].bmp";
+  if (FsHelpers::hasXtcExtension(path)) return "/.crosspoint/xtc_" + hash + "/thumb_[HEIGHT].bmp";
+  if (FsHelpers::hasTxtExtension(path) || FsHelpers::hasMarkdownExtension(path)) return {};
+  // The library index's remaining book shape is a converted manga folder. The existence check
+  // in cachedCoverPath keeps an arbitrary unsupported path from ever being drawn as a cover.
+  return "/.crosspoint/manga_" + hash + "/thumb_[HEIGHT].bmp";
 }
 }  // namespace
 
@@ -157,7 +167,9 @@ std::string ReadingHubActivity::cachedCoverPath(const std::string& templatePath,
   const std::string wanted = UITheme::getCoverThumbPath(templatePath, preferredHeight);
   if (Storage.exists(wanted.c_str())) return wanted;
   const std::string sibling = UITheme::findSiblingCoverThumb(wanted);
-  return sibling.empty() ? templatePath : sibling;
+  // Keep only a concrete file. Returning the unresolved template makes every e-ink repaint scan
+  // the cache directory again, even though Reading Hub never generates covers itself.
+  return sibling;
 }
 
 void ReadingHubActivity::cacheCoverPath(RecentBook& book, const int preferredHeight) {
@@ -213,62 +225,100 @@ void ReadingHubActivity::loadShelves() {
   shelfPreviewCount = 0;
   shelfTotalCount = 0;
 
-  RecentBooksStore cache;
-  std::vector<RecentBook> catalog;
-  if (cache.loadFromPath(LIBRARY_CACHE_JSON)) {
-    catalog = cache.takeBooks();
-  } else {
-    catalog = RECENT_BOOKS.getBooks();
+  // The old implementation inflated the full 2,048-book JSON catalog plus a sort vector just
+  // to draw seven rows. The CLX index already has dense folder ids and path hashes, so this pass
+  // stays bounded: seven shelf models plus at most 4KB of completion hashes.
+  std::unique_ptr<uint64_t[]> finishedHashes;
+  uint16_t finishedHashCount = 0;
+  library::LibraryIndexFile index;
+  if (!ReadingStatsStore::readFinishedPathHashesFromFile(finishedHashes, finishedHashCount) ||
+      !index.open(library::libraryIndexPath())) {
+    // A non-authoritative fallback must not invent shelves from the ten-item recents list. One
+    // explicit Open Library row takes the user to the existing full browser instead.
+    shelfTotalCount = 1;
+    shelvesLoaded = true;
+    return;
   }
-  if (!libraryCountKnown) libraryBookCount = static_cast<uint16_t>(std::min<size_t>(catalog.size(), UINT16_MAX));
-  // One uint16 ordinal per cached book lets us group folders without copying the catalog's
-  // strings. The vector is bounded by RecentBooksStore's 2048-entry cache cap and dies as soon as
-  // the seven-row shelf model has been derived.
-  const auto order =
-      makeLibraryFolderOrder(catalog, [](const RecentBook& book) -> std::string_view { return book.path; });
-  std::string previousFolder;
-  int storedShelf = -1;
-  for (const uint16_t bookIndex : order) {
-    if (bookIndex >= catalog.size()) continue;
-    const RecentBook& book = catalog[bookIndex];
-    const std::string folder(libraryFolderPath(book.path));
-    if (shelfTotalCount == 0 || folder != previousFolder) {
-      previousFolder = folder;
-      shelfTotalCount++;
-      storedShelf = -1;
-      if (shelfPreviewCount < MAX_SHELF_PREVIEW) {
-        storedShelf = shelfPreviewCount++;
-        shelves[storedShelf].path = folder;
-        shelves[storedShelf].name = shelfName(folder);
-        shelves[storedShelf].coverBmpPath = cachedCoverPath(book.coverBmpPath, 72);
-        shelves[storedShelf].bookCount = 1;
-      }
-    } else if (storedShelf >= 0 && shelves[storedShelf].bookCount < UINT16_MAX) {
-      shelves[storedShelf].bookCount++;
-      if (shelves[storedShelf].coverBmpPath.empty()) {
-        shelves[storedShelf].coverBmpPath = cachedCoverPath(book.coverBmpPath, 72);
+
+  libraryBookCount = index.bookCount();
+  libraryCountKnown = true;
+  std::array<uint16_t, MAX_SHELF_PREVIEW> folderIds{};
+  bool hasMoreShelves = false;
+  for (uint16_t ordinal = 0; ordinal < index.bookCount(); ordinal++) {
+    library::ClixRecord record{};
+    uint64_t pathHash = 0;
+    if (!index.readRecord(ordinal, record) || !index.readPathHash(record, pathHash)) {
+      shelves = {};
+      shelfPreviewCount = 0;
+      shelfTotalCount = 1;
+      shelvesLoaded = true;
+      return;
+    }
+    if (finishedHashCount > 0 &&
+        std::binary_search(finishedHashes.get(), finishedHashes.get() + finishedHashCount, pathHash)) {
+      continue;
+    }
+
+    int shelfIndex = -1;
+    for (int candidate = 0; candidate < shelfPreviewCount; candidate++) {
+      if (folderIds[candidate] == record.folderId) {
+        shelfIndex = candidate;
+        break;
       }
     }
+    if (shelfIndex >= 0) {
+      if (shelves[shelfIndex].bookCount < UINT16_MAX) shelves[shelfIndex].bookCount++;
+      continue;
+    }
+    if (shelfPreviewCount >= MAX_SHELF_PREVIEW) {
+      hasMoreShelves = true;
+      continue;
+    }
+
+    std::string folder;
+    if (!index.readFolderPath(record.folderId, folder)) {
+      shelves = {};
+      shelfPreviewCount = 0;
+      shelfTotalCount = 1;
+      shelvesLoaded = true;
+      return;
+    }
+    shelfIndex = shelfPreviewCount++;
+    folderIds[shelfIndex] = record.folderId;
+    shelves[shelfIndex].path = folder;
+    shelves[shelfIndex].name = shelfName(folder);
+    shelves[shelfIndex].bookCount = 1;
+    std::string bookPath;
+    if (index.readPath(record, bookPath)) {
+      shelves[shelfIndex].coverBmpPath = cachedCoverPath(coverTemplateForPath(bookPath), 72);
+    }
   }
+  std::sort(shelves.begin(), shelves.begin() + shelfPreviewCount,
+            [](const ReadingHubShelf& left, const ReadingHubShelf& right) { return left.name < right.name; });
+  shelfTotalCount = shelfPreviewCount + (hasMoreShelves ? 1 : 0);
   shelvesLoaded = true;
 }
 
 void ReadingHubActivity::loadQueuePreview(const int limit) {
   queuePreviewCount = 0;
-  std::vector<std::string> stale;
-  stale.reserve(MAX_QUEUE_PREVIEW);
-  for (const auto& path : queueStore.queue().paths()) {
-    if (queuePreviewCount >= std::min(limit, MAX_QUEUE_PREVIEW)) break;
+  bool changed = false;
+  size_t queueIndex = 0;
+  while (queueIndex < queueStore.queue().paths().size()) {
+    const std::string& path = queueStore.queue().paths()[queueIndex];
     if (!Storage.exists(path.c_str())) {
-      stale.push_back(path);
+      // Copy only the stale entry: remove() invalidates the reference and the queue is capped at
+      // 32 paths. Valid entries do not get duplicated merely for cleanup.
+      const std::string stalePath = path;
+      changed = queueStore.queue().remove(stalePath) || changed;
       continue;
     }
-    queueBooks[queuePreviewCount] = resolveBook(path);
-    cacheCoverPath(queueBooks[queuePreviewCount], 96);
-    queuePreviewCount++;
+    if (queuePreviewCount < std::min(limit, MAX_QUEUE_PREVIEW)) {
+      queueBooks[queuePreviewCount] = resolveBook(path);
+      cacheCoverPath(queueBooks[queuePreviewCount], 96);
+      queuePreviewCount++;
+    }
+    queueIndex++;
   }
-  bool changed = false;
-  for (const auto& path : stale) changed = queueStore.queue().remove(path) || changed;
   if (changed) queueStore.saveToFile();
   queueFullyLoaded = limit >= MAX_QUEUE_PREVIEW;
 }
@@ -394,12 +444,20 @@ const RecentBook* ReadingHubActivity::selectedBook() const {
 }
 
 void ReadingHubActivity::showBookActions(const RecentBook& book) {
-  READING_STATS_STORE = ReadingStatsStore{};
-  READING_STATS_STORE.loadFromFile();
+  std::unique_ptr<uint64_t[]> finishedHashes;
+  uint16_t finishedHashCount = 0;
+  if (!ReadingStatsStore::readFinishedPathHashesFromFile(finishedHashes, finishedHashCount)) {
+    LOG_ERR("HUB", "Cannot read completion status; actions suppressed");
+    return;
+  }
+  const bool isFinished =
+      finishedHashCount > 0 && std::binary_search(finishedHashes.get(), finishedHashes.get() + finishedHashCount,
+                                                  ReadingStatsStore::finishedPathHash(book.path));
   const int queueIndex = queueStore.queue().indexOf(book.path);
-  auto activity = makeUniqueNoThrow<BookActionsActivity>(renderer, mappedInput, book.title, queueIndex >= 0,
-                                                         READING_STATS_STORE.isBookFinished(book.path), queueIndex,
-                                                         static_cast<int>(queueStore.queue().size()));
+  const int actionQueueCount = section == Section::QUEUE ? std::min<int>(queueStore.queue().size(), MAX_QUEUE_PREVIEW)
+                                                         : static_cast<int>(queueStore.queue().size());
+  auto activity = makeUniqueNoThrow<BookActionsActivity>(renderer, mappedInput, book.title, queueIndex >= 0, isFinished,
+                                                         queueIndex, actionQueueCount);
   if (!activity) {
     LOG_ERR("HUB", "OOM: book actions");
     return;
@@ -429,8 +487,19 @@ void ReadingHubActivity::applyBookAction(const BookAction action, const std::str
       if (changed) queueStore.saveToFile();
       break;
     case BookAction::MARK_COMPLETED:
+      READING_STATS_STORE = ReadingStatsStore{};
+      if (!READING_STATS_STORE.loadFromFileForMutation()) {
+        LOG_ERR("HUB", "Completion history is unreadable; refusing to overwrite it");
+        READING_STATS_STORE = ReadingStatsStore{};
+        return;
+      }
       changed = READING_STATS_STORE.setBookFinished(path, true);
-      if (changed) READING_STATS_STORE.saveToFile();
+      if (changed && !READING_STATS_STORE.saveToFile()) {
+        LOG_ERR("HUB", "Failed to save completed status");
+        READING_STATS_STORE = ReadingStatsStore{};
+        return;
+      }
+      READING_STATS_STORE = ReadingStatsStore{};
       if (queueStore.queue().remove(path)) {
         queueStore.saveToFile();
         changed = true;
@@ -438,8 +507,19 @@ void ReadingHubActivity::applyBookAction(const BookAction action, const std::str
       rateAfterAction = true;
       break;
     case BookAction::MARK_UNFINISHED:
+      READING_STATS_STORE = ReadingStatsStore{};
+      if (!READING_STATS_STORE.loadFromFileForMutation()) {
+        LOG_ERR("HUB", "Completion history is unreadable; refusing to overwrite it");
+        READING_STATS_STORE = ReadingStatsStore{};
+        return;
+      }
       changed = READING_STATS_STORE.setBookFinished(path, false);
-      if (changed) READING_STATS_STORE.saveToFile();
+      if (changed && !READING_STATS_STORE.saveToFile()) {
+        LOG_ERR("HUB", "Failed to save unfinished status");
+        READING_STATS_STORE = ReadingStatsStore{};
+        return;
+      }
+      READING_STATS_STORE = ReadingStatsStore{};
       break;
     case BookAction::RATE_BOOK:
       showBookRating(path, title);
@@ -473,8 +553,15 @@ void ReadingHubActivity::showBookStats(const std::string& path, const std::strin
 }
 
 void ReadingHubActivity::showBookRating(const std::string& path, const std::string& title) {
-  auto activity =
-      makeUniqueNoThrow<BookRatingActivity>(renderer, mappedInput, title, READING_STATS_STORE.getBookRating(path));
+  READING_STATS_STORE = ReadingStatsStore{};
+  if (!READING_STATS_STORE.loadFromFileForMutation()) {
+    LOG_ERR("HUB", "Completion history is unreadable; refusing to overwrite it");
+    READING_STATS_STORE = ReadingStatsStore{};
+    return;
+  }
+  const uint8_t initialRating = READING_STATS_STORE.getBookRating(path);
+  READING_STATS_STORE = ReadingStatsStore{};
+  auto activity = makeUniqueNoThrow<BookRatingActivity>(renderer, mappedInput, title, initialRating);
   if (!activity) {
     LOG_ERR("HUB", "OOM: book rating");
     return;
@@ -482,7 +569,17 @@ void ReadingHubActivity::showBookRating(const std::string& path, const std::stri
   auto handler = [this, path](const ActivityResult& result) {
     if (!result.isCancelled && std::holds_alternative<IntervalResult>(result.data)) {
       const auto rating = static_cast<uint8_t>(std::get<IntervalResult>(result.data).value);
-      if (READING_STATS_STORE.setBookRating(path, rating)) READING_STATS_STORE.saveToFile();
+      READING_STATS_STORE = ReadingStatsStore{};
+      if (!READING_STATS_STORE.loadFromFileForMutation()) {
+        LOG_ERR("HUB", "Completion history is unreadable; refusing to overwrite it");
+        READING_STATS_STORE = ReadingStatsStore{};
+        refreshAfterBookAction();
+        return;
+      }
+      if (READING_STATS_STORE.setBookRating(path, rating) && !READING_STATS_STORE.saveToFile()) {
+        LOG_ERR("HUB", "Failed to save book rating");
+      }
+      READING_STATS_STORE = ReadingStatsStore{};
     }
     refreshAfterBookAction();
   };
@@ -493,6 +590,7 @@ void ReadingHubActivity::refreshAfterBookAction() {
   queueStore.clear();
   queueStore.loadFromFile();
   queueFullyLoaded = false;
+  shelvesLoaded = false;
   completedBooksLoaded = false;
   loadCompletionIndex();
   loadQueuePreview(section == Section::QUEUE ? MAX_QUEUE_PREVIEW : 1);

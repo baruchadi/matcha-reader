@@ -1,6 +1,8 @@
 #pragma once
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 struct DailyReading {
@@ -67,6 +69,8 @@ class ReadingStatsStore {
   // before raising this.
   static constexpr size_t MAX_LANG_DAYS = 2500;
   std::vector<LanguageDaily> languageDays;  // sorted ascending by date
+
+  bool loadFromFileImpl(bool requireComplete);
 
  public:
   static ReadingStatsStore& getInstance() { return instance; }
@@ -142,6 +146,10 @@ class ReadingStatsStore {
                                           uint16_t& outRatedCount, uint32_t& outRatingSum,
                                           const std::vector<std::string>* membershipCandidates = nullptr,
                                           std::vector<uint8_t>* outMembership = nullptr);
+  // Compact completion membership for callers that must compare many library entries without
+  // loading the full stats history. At the on-disk cap this owns exactly 4KB of hashes.
+  static bool readFinishedPathHashesFromFile(std::unique_ptr<uint64_t[]>& outHashes, uint16_t& outCount);
+  static uint64_t finishedPathHash(std::string_view path);
 
   uint16_t getMinutesForDay(uint16_t year, uint8_t month, uint8_t day) const;
   uint16_t getMinutesThisWeek(uint16_t todayYear, uint8_t todayMonth, uint8_t todayDay) const;
@@ -157,6 +165,9 @@ class ReadingStatsStore {
 
   bool saveToFile() const;
   bool loadFromFile();
+  // Mutation must never save a partially loaded/corrupt store over good history. A missing file
+  // is a valid empty first-run store; an existing file must pass every persisted block.
+  bool loadFromFileForMutation();
 };
 
 #define READING_STATS_STORE ReadingStatsStore::getInstance()

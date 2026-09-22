@@ -4,6 +4,7 @@
 #include <I18n.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <string>
@@ -236,6 +237,15 @@ TEST_F(StatsTest, FinishedPreviewMatchesAllCandidatesNotOnlyVisibleTail) {
   EXPECT_EQ(membership[0], 1);
   EXPECT_EQ(membership[1], 0);
   EXPECT_EQ(membership[2], 1);
+
+  std::unique_ptr<uint64_t[]> hashes;
+  uint16_t hashCount = 0;
+  ASSERT_TRUE(ReadingStatsStore::readFinishedPathHashesFromFile(hashes, hashCount));
+  ASSERT_EQ(hashCount, 8);
+  EXPECT_TRUE(
+      std::binary_search(hashes.get(), hashes.get() + hashCount, ReadingStatsStore::finishedPathHash(candidates[0])));
+  EXPECT_FALSE(
+      std::binary_search(hashes.get(), hashes.get() + hashCount, ReadingStatsStore::finishedPathHash(candidates[1])));
 }
 
 TEST_F(StatsTest, FinishedPreviewKeepsValidPathsWhenTrailingRatingsAreTruncated) {
@@ -260,6 +270,16 @@ TEST_F(StatsTest, FinishedPreviewKeepsValidPathsWhenTrailingRatingsAreTruncated)
   EXPECT_EQ(total, 1);
   EXPECT_EQ(rated, 0);
   EXPECT_EQ(ratingSum, 0u);
+
+  READING_STATS_STORE = ReadingStatsStore{};
+  EXPECT_FALSE(READING_STATS_STORE.loadFromFileForMutation())
+      << "a truncated optional block may be displayed fail-soft but must never be overwritten";
+}
+
+TEST_F(StatsTest, MissingStatsFileIsSafeForFirstMutation) {
+  EXPECT_TRUE(READING_STATS_STORE.loadFromFileForMutation());
+  ASSERT_TRUE(READING_STATS_STORE.setBookFinished("/Books/first.epub", true));
+  EXPECT_TRUE(READING_STATS_STORE.saveToFile());
 }
 
 TEST_F(StatsTest, VersionFourCompletionLoadsAsUnrated) {

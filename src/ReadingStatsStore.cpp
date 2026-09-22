@@ -419,6 +419,70 @@ bool ReadingStatsStore::readFinishedCountFromFile(uint16_t& outCount) {
   return countRead;
 }
 
+uint64_t ReadingStatsStore::finishedPathHash(const std::string_view path) {
+  uint64_t hash = 14695981039346656037ULL;  // FNV-1a 64, also used by the library index.
+  for (const unsigned char value : path) {
+    hash ^= value;
+    hash *= 1099511628211ULL;
+  }
+  return hash;
+}
+
+bool ReadingStatsStore::readFinishedPathHashesFromFile(std::unique_ptr<uint64_t[]>& outHashes, uint16_t& outCount) {
+  outHashes.reset();
+  outCount = 0;
+  const std::string path = statsPath();
+  if (!Storage.exists(path.c_str())) return true;
+
+  HalFile f;
+  if (!Storage.openFileForRead("STAT", path.c_str(), f)) return false;
+  const auto fail = [&]() {
+    f.close();
+    outHashes.reset();
+    outCount = 0;
+    return false;
+  };
+
+  uint8_t version = 0;
+  uint16_t dayCount = 0;
+  uint16_t headerFinishedCount = 0;
+  if (f.read(&version, 1) != 1 || f.read(reinterpret_cast<uint8_t*>(&dayCount), 2) != 2 || version < 2 ||
+      f.read(reinterpret_cast<uint8_t*>(&headerFinishedCount), 2) != 2 ||
+      !skipBytes(f, static_cast<size_t>(dayCount) * sizeof(DailyReading))) {
+    return fail();
+  }
+
+  uint16_t pathCount = 0;
+  if (f.read(reinterpret_cast<uint8_t*>(&pathCount), 2) != 2 || pathCount > 500 || headerFinishedCount != pathCount) {
+    return fail();
+  }
+  auto hashes = makeUniqueNoThrow<uint64_t[]>(pathCount == 0 ? 1 : pathCount);
+  if (!hashes) return fail();
+
+  uint8_t chunk[64];
+  for (uint16_t index = 0; index < pathCount; index++) {
+    uint16_t pathLength = 0;
+    if (f.read(reinterpret_cast<uint8_t*>(&pathLength), 2) != 2 || pathLength > 500) return fail();
+    uint64_t hash = 14695981039346656037ULL;
+    size_t remaining = pathLength;
+    while (remaining > 0) {
+      const size_t bytes = std::min(remaining, sizeof(chunk));
+      if (f.read(chunk, bytes) != bytes) return fail();
+      for (size_t offset = 0; offset < bytes; offset++) {
+        hash ^= chunk[offset];
+        hash *= 1099511628211ULL;
+      }
+      remaining -= bytes;
+    }
+    hashes[index] = hash;
+  }
+  f.close();
+  std::sort(hashes.get(), hashes.get() + pathCount);
+  outHashes = std::move(hashes);
+  outCount = pathCount;
+  return true;
+}
+
 bool ReadingStatsStore::readFinishedPreviewFromFile(std::vector<FinishedBookPreview>& out, const size_t maxBooks,
                                                     uint16_t& outTotal, uint16_t& outRatedCount, uint32_t& outRatingSum,
                                                     const std::vector<std::string>* membershipCandidates,
@@ -680,7 +744,14 @@ bool ReadingStatsStore::saveToFile() const {
   return true;
 }
 
-bool ReadingStatsStore::loadFromFile() {
+bool ReadingStatsStore::loadFromFile() { return loadFromFileImpl(false); }
+
+bool ReadingStatsStore::loadFromFileForMutation() {
+  const std::string path = statsPath();
+  return !Storage.exists(path.c_str()) || loadFromFileImpl(true);
+}
+
+bool ReadingStatsStore::loadFromFileImpl(const bool requireComplete) {
   HalFile f;
   if (!Storage.openFileForRead("STAT", statsPath().c_str(), f)) return false;
   uint8_t version;
@@ -702,15 +773,22 @@ bool ReadingStatsStore::loadFromFile() {
   // Keep the most recent MAX_DAYS and CONSUME the rest: skipping them by clamping `count`
   // would leave the file positioned mid-block and misalign everything after it.
   days.clear();
+  bool daysIntact = true;
   const size_t keepDays = std::min<size_t>(count, MAX_DAYS);
   for (size_t i = 0; i + keepDays < count; i++) {
     DailyReading discard;
-    if (f.read(reinterpret_cast<uint8_t*>(&discard), sizeof(DailyReading)) != sizeof(DailyReading)) break;
+    if (f.read(reinterpret_cast<uint8_t*>(&discard), sizeof(DailyReading)) != sizeof(DailyReading)) {
+      daysIntact = false;
+      break;
+    }
   }
   days.reserve(keepDays);
-  for (size_t i = 0; i < keepDays; i++) {
+  for (size_t i = 0; daysIntact && i < keepDays; i++) {
     DailyReading dr;
-    if (f.read(reinterpret_cast<uint8_t*>(&dr), sizeof(DailyReading)) != sizeof(DailyReading)) break;
+    if (f.read(reinterpret_cast<uint8_t*>(&dr), sizeof(DailyReading)) != sizeof(DailyReading)) {
+      daysIntact = false;
+      break;
+    }
     // Drop entries recorded while the system clock was unset (RTC-less devices booted at the
     // 1970 epoch before HalClock::restoreSystemTime existed) -- they are misdated garbage that
     // pollutes streaks, totals, and the calendar.
@@ -754,7 +832,7 @@ bool ReadingStatsStore::loadFromFile() {
   // Per-book block (v3+). Only readable when the paths block above was consumed whole -- a short
   // read there leaves the file position mid-record, so anything after it is misaligned garbage.
   books.clear();
-  bool booksIntact = false;
+  bool booksIntact = version < 3;
   if (version >= 3 && pathsIntact) {
     uint16_t bookCount = 0;
     if (f.read(reinterpret_cast<uint8_t*>(&bookCount), 2) == 2 && bookCount <= MAX_BOOKS) {
@@ -821,10 +899,11 @@ bool ReadingStatsStore::loadFromFile() {
   // Ratings (v5+). Any older, truncated, mismatched, or out-of-range block safely becomes
   // "unrated" without losing the completed paths themselves.
   finishedBookRatings.assign(finishedBookPaths.size(), 0);
+  bool ratingsIntact = version < 5;
   if (version >= 5 && pathsIntact && booksIntact && languageDaysIntact) {
     uint16_t ratingCount = 0;
     if (f.read(reinterpret_cast<uint8_t*>(&ratingCount), 2) == 2 && ratingCount == finishedBookPaths.size()) {
-      bool ratingsIntact = true;
+      ratingsIntact = true;
       for (size_t i = 0; i < ratingCount; i++) {
         uint8_t rating = 0;
         if (f.read(&rating, 1) != 1 || rating > 5) {
@@ -837,5 +916,6 @@ bool ReadingStatsStore::loadFromFile() {
     }
   }
   f.close();
-  return true;
+  return !requireComplete || (version >= 1 && version <= STATS_VERSION && daysIntact && pathsIntact && booksIntact &&
+                              languageDaysIntact && ratingsIntact);
 }

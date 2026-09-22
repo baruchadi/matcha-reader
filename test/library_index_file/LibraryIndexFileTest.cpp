@@ -169,6 +169,10 @@ TEST(LibraryIndexFile, ReadsPathHashAndEveryPublicBlobField) {
   std::string path;
   ASSERT_TRUE(index.readPath(record, path));
   EXPECT_EQ(path, "/books/x");
+  std::string folderPath;
+  ASSERT_TRUE(index.readFolderPath(0, folderPath));
+  EXPECT_EQ(folderPath, "/books");
+  EXPECT_FALSE(index.readFolderPath(1, folderPath));
   index.close();
 
   bytes[header.nameStart + sizeof(PATH_HASH) + 5] = 255;

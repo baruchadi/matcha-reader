@@ -1024,7 +1024,7 @@ void CoverLibraryActivity::loadShelves() {
     size_t lastSlash = folder.find_last_of('/');
     std::string name =
         (lastSlash != std::string::npos && lastSlash < folder.size() - 1) ? folder.substr(lastSlash + 1) : folder;
-    if (folder == "/") name = "Unsorted";
+    if (folder == "/") name = tr(STR_HUB_UNSORTED);
 
     ShelfInfo fresh;
     fresh.folderPath = std::move(folder);
